@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from aegisvault.api.schemas import FileEvent
+from aegisvault.api.schemas import ClassificationResult, FileEvent
 from aegisvault.config import AegisConfig
 from aegisvault.execution.vault import VaultManager
 from aegisvault.model.classifier import Classifier
@@ -16,6 +16,7 @@ from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.security.keytree import derive_vault_key
+from aegisvault.security.policy import SecurityPolicyError
 
 
 class FakeProvider(ModelProvider):
@@ -130,3 +131,70 @@ async def test_pipeline_uses_injected_vault_manager(
     assert status.state == TaskState.COMPLETED.name, message
     assert not source.exists()
     assert any(config.paths.vault.rglob("*.log"))
+
+
+async def test_pipeline_quarantines_on_security_policy_error(
+    tmp_path: Path,
+    config: AegisConfig,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """Security policy violations transition the task to QUARANTINED."""
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+    source = config.paths.inbox / "secret.txt"
+    source.write_text("sensitive data")
+
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key)
+
+    async def failing_classify(_source_path: Path) -> ClassificationResult:
+        raise SecurityPolicyError("untrusted connection")
+
+    pipeline._classify = failing_classify  # type: ignore[method-assign]
+
+    event = FileEvent(event_id=uuid4(), source_path=source)
+    status = await pipeline.process(event)
+
+    assert status.state == TaskState.QUARANTINED.name
+    assert "untrusted connection" in status.message
+
+
+async def test_pipeline_fails_on_generic_exception(
+    tmp_path: Path,
+    config: AegisConfig,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """Unexpected exceptions transition the task to FAILED."""
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+    source = config.paths.inbox / "secret.txt"
+    source.write_text("sensitive data")
+
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key)
+
+    async def failing_classify(_source_path: Path) -> ClassificationResult:
+        raise ValueError("classifier exploded")
+
+    pipeline._classify = failing_classify  # type: ignore[method-assign]
+
+    event = FileEvent(event_id=uuid4(), source_path=source)
+    status = await pipeline.process(event)
+
+    assert status.state == TaskState.FAILED.name
+    assert "classifier exploded" in status.message
+
+
+def test_secure_delete_missing_file_is_no_op(
+    config: AegisConfig,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """_secure_delete silently returns when the source file no longer exists."""
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key)
+
+    missing = config.paths.inbox / "missing.txt"
+    pipeline._secure_delete(missing)
+
+    assert not missing.exists()

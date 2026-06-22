@@ -4,15 +4,33 @@ A master key is the root secret from which the Vault Key is derived. Providers
 control how that root secret is obtained and protected.
 """
 
+import contextlib
 import logging
 import os
 import stat
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from aegisvault.security.keytree import generate_salt
 
 logger = logging.getLogger(__name__)
+
+# Pluggable provider registry. Built-in providers are registered at import time;
+# downstream packages or tests can register additional providers at runtime.
+_REGISTRY: dict[str, type["MasterKeyProvider"]] = {}
+
+
+def register_provider(name: str, provider_cls: type["MasterKeyProvider"]) -> None:
+    """Register a master key provider under *name* (case-insensitive)."""
+    if not issubclass(provider_cls, MasterKeyProvider):
+        raise TypeError("Provider must inherit from MasterKeyProvider")
+    _REGISTRY[name.lower()] = provider_cls
+
+
+def get_registered_providers() -> dict[str, type["MasterKeyProvider"]]:
+    """Return a shallow copy of the registered providers map."""
+    return dict(_REGISTRY)
 
 
 class MasterKeyProvider(ABC):
@@ -30,8 +48,6 @@ class MasterKeyProvider(ABC):
 class FilePasswordProvider(MasterKeyProvider):
     """Development provider: derive master key from a password file or env var."""
 
-    _FALLBACK_SALT = b"aegisvault-filepassword-salt-v1"
-
     def __init__(
         self,
         password: str | None = None,
@@ -44,26 +60,37 @@ class FilePasswordProvider(MasterKeyProvider):
         self._password_file = password_file
         self._storage_path = storage_path
         self._key: bytes | None = None
+        self._salt: bytes | None = None
 
     def _get_or_create_salt(self) -> bytes:
-        """Return a persistent per-storage salt, or the fixed fallback salt."""
+        """Return a persistent per-storage salt.
+
+        When *storage_path* is provided the salt is generated once, written to
+        disk with owner-only permissions, and reused on subsequent runs. When
+        *storage_path* is None a random ephemeral salt is generated for this
+        process lifetime; the key will not survive a restart.
+        """
+        if self._salt is not None:
+            return self._salt
         if self._storage_path is None:
-            # Development fallback: deterministic salt for backward compatibility.
             logger.warning(
                 "FilePasswordProvider running without storage_path; "
-                "using fixed development salt."
+                "using ephemeral random salt (key will not survive restart)."
             )
-            return self._FALLBACK_SALT
+            self._salt = generate_salt()
+            return self._salt
         salt_path = self._storage_path / "filepassword.salt"
         if salt_path.exists():
-            return salt_path.read_bytes()
+            self._salt = salt_path.read_bytes()
+            return self._salt
 
         salt = generate_salt()
         self._storage_path.mkdir(parents=True, exist_ok=True)
         self._atomic_write_salt(salt_path, salt)
         # Re-read from disk so concurrent initialisations always converge on
         # the same persisted salt.
-        return salt_path.read_bytes()
+        self._salt = salt_path.read_bytes()
+        return self._salt
 
     @staticmethod
     def _atomic_write_salt(path: Path, salt: bytes) -> None:
@@ -83,11 +110,9 @@ class FilePasswordProvider(MasterKeyProvider):
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(salt)
-        except Exception:
-            try:
+        except OSError:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
             raise
 
     def get_key(self) -> bytes:
@@ -125,6 +150,11 @@ class DpapiMasterKeyProvider(MasterKeyProvider):
 
     The master key is generated once, protected with DPAPI for the current
     user, and persisted to disk. It is decrypted silently when needed.
+
+    On non-Windows platforms this provider can be instantiated and queried
+    (``exists()``), but ``get_key()`` raises ``RuntimeError`` because DPAPI is
+    not available. This allows the same application code to run on Linux while
+    selecting a different provider, e.g. ``FilePasswordProvider``.
     """
 
     def __init__(self, storage_path: Path) -> None:
@@ -135,6 +165,11 @@ class DpapiMasterKeyProvider(MasterKeyProvider):
         """Return master key, generating and protecting it if necessary."""
         if self._key is not None:
             return self._key
+        if sys.platform != "win32":
+            raise RuntimeError(
+                "DPAPI master key provider is only available on Windows. "
+                "Use FilePasswordProvider on Linux."
+            )
         if not self.exists():
             self._key = generate_salt()
             self._protect_and_store(self._key)
@@ -181,15 +216,32 @@ def create_master_key_provider(
     password: str | None = None,
     password_file: Path | None = None,
 ) -> MasterKeyProvider:
-    """Factory for master key providers."""
-    if provider_name.lower() == "filepassword":
+    """Factory for master key providers.
+
+    Looks up the provider in the pluggable registry. Built-in providers are
+    registered automatically; custom providers can be added with
+    ``register_provider``.
+    """
+    name = provider_name.lower()
+    # Built-ins are constructed directly so mypy can verify their signatures.
+    if name == "filepassword":
         return FilePasswordProvider(
             password=password,
             password_file=password_file,
             storage_path=storage_path,
         )
-    if provider_name.lower() == "dpapi":
+    if name == "dpapi":
         return DpapiMasterKeyProvider(storage_path)
-    if provider_name.lower() == "tpm":
+    if name == "tpm":
         return TpmMasterKeyProvider(storage_path)
-    raise ValueError(f"Unknown master key provider: {provider_name}")
+    provider_cls = _REGISTRY.get(name)
+    if provider_cls is None:
+        raise ValueError(f"Unknown master key provider: {provider_name}")
+    # Custom providers are expected to accept a single ``storage_path`` argument.
+    return provider_cls(storage_path)  # type: ignore[call-arg]
+
+
+# Register built-in providers.
+register_provider("filepassword", FilePasswordProvider)
+register_provider("dpapi", DpapiMasterKeyProvider)
+register_provider("tpm", TpmMasterKeyProvider)

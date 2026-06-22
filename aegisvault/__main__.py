@@ -4,7 +4,7 @@ import sys
 
 
 def main() -> int:
-    """Main entry point."""
+    """Run the AegisVault CLI entry point."""
     print("AegisVault is starting...")  # noqa: T201
     return 0
 

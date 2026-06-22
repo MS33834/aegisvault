@@ -36,20 +36,13 @@ def sensitive_operation(func: F) -> F:
 
     @wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
-        conn: Connection | None = None
-        for arg in args:
-            if isinstance(arg, Connection):
-                conn = arg
-                break
-        if conn is None:
-            maybe_conn = kwargs.get("connection")
-            if isinstance(maybe_conn, Connection):
-                conn = maybe_conn
-        if not isinstance(conn, Connection):
-            raise SecurityPolicyError(
-                "Sensitive operation requires a Connection argument"
-            )
-        require_trusted_local_connection(conn)
+        conns: list[Connection] = [arg for arg in args if isinstance(arg, Connection)] + [
+            v for v in kwargs.values() if isinstance(v, Connection)
+        ]
+        if not conns:
+            raise SecurityPolicyError("Sensitive operation requires a Connection argument")
+        for conn in conns:
+            require_trusted_local_connection(conn)
         return func(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]

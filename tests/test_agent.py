@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from aegisvault.api.schemas import SearchQuery, TaskStatus
+from aegisvault.api.schemas import FileEvent, SearchQuery, TaskStatus
 from aegisvault.config import AegisConfig
 from aegisvault.model.classifier import Classifier
 from aegisvault.model.provider import ModelProvider
@@ -57,9 +57,7 @@ class FakeTaskStore:
     def get(self, task_id: UUID) -> dict[str, object] | None:
         return self._records.get(str(task_id))
 
-    def update_state(
-        self, task_id: UUID, state: TaskState, message: str = ""
-    ) -> TaskStatus:
+    def update_state(self, task_id: UUID, state: TaskState, message: str = "") -> TaskStatus:
         self._records[str(task_id)] = {"state": state.name, "message": message}
         return TaskStatus(task_id=task_id, state=state.name, message=message)
 
@@ -121,9 +119,46 @@ def test_agent_get_status_with_injected_task_store(
     assert status.message == "done"
 
 
-async def test_agent_search_returns_empty(
+def test_agent_get_status_missing_task_returns_none(
     config: AegisConfig, classifier: Classifier
 ) -> None:
+    """AegisAgent.get_status returns None for unknown task IDs."""
+    agent = AegisAgent(
+        config,
+        task_store=FakeTaskStore(),
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+    )
+
+    assert agent.get_status(uuid4()) is None
+
+
+async def test_agent_on_file_event_delegates_to_pipeline(
+    config: AegisConfig, classifier: Classifier
+) -> None:
+    """AegisAgent.on_file_event forwards to the processing pipeline."""
+    agent = AegisAgent(
+        config,
+        task_store=FakeTaskStore(),
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+    )
+    expected = TaskStatus(task_id=uuid4(), state=TaskState.COMPLETED.name)
+
+    async def fake_process(event: FileEvent) -> TaskStatus:
+        return expected
+
+    agent.pipeline.process = fake_process  # type: ignore[method-assign]
+
+    event = FileEvent(event_id=uuid4(), source_path=Path("/tmp/file.txt"))
+    result = await agent.on_file_event(event)
+
+    assert result is expected
+
+
+async def test_agent_search_returns_empty(config: AegisConfig, classifier: Classifier) -> None:
     """AegisAgent.search works with injected dependencies."""
     agent = AegisAgent(
         config,

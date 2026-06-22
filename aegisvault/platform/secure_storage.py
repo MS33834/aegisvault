@@ -8,7 +8,7 @@ permissions are verified on load.
 """
 
 import base64
-import logging
+import contextlib
 import os
 import stat
 import sys
@@ -16,9 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-logger = logging.getLogger(__name__)
-
 
 _DEFAULT_KEY_PATH = Path.home() / ".config" / "aegisvault" / ".storage_key"
 _KEY_ENV_VAR = "AEGISVAULT_STORAGE_KEY_FILE"
@@ -40,17 +37,15 @@ def _load_or_create_fallback_key() -> bytes:
     """Return a 32-byte AES key, generating it if necessary.
 
     The key file is created with 0o600 permissions. If an existing file has
-    overly permissive permissions, a warning is emitted.
+    overly permissive permissions, an error is raised.
     """
     key_path = _key_file_path()
     if key_path.exists():
         mode = key_path.stat().st_mode
         if mode & stat.S_IRWXG or mode & stat.S_IRWXO:
-            logger.warning(
-                "Storage key file %s has permissive permissions (%o). "
-                "Restrict it to owner-only access.",
-                key_path,
-                stat.S_IMODE(mode),
+            raise RuntimeError(
+                f"Storage key file {key_path} has overly permissive permissions "
+                f"({oct(stat.S_IMODE(mode))}); restrict it to owner-only access and retry."
             )
         return key_path.read_bytes()
 
@@ -64,8 +59,9 @@ def _load_or_create_fallback_key() -> bytes:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(key)
-    except Exception:
-        os.close(fd)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.close(fd)
         raise
     return key
 

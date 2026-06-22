@@ -56,4 +56,6 @@ filterwarnings = [
     "ignore::DeprecationWarning:pytest_asyncio.*",
     "ignore::pytest.PytestDeprecationWarning",
 ]
-addopts = "-m 'not integration and not gui and not slow' --cov=aegisvault --cov-branch --cov-report=term-missing --cov-fail-under=60"
+# --assert=plain works around a pytest assertion-rewriting incompatibility
+# observed on Python 3.14 (the project itself targets Python 3.11+).
+addopts = "-m 'not integration and not gui and not slow' --assert=plain --cov=aegisvault --cov-branch --cov-report=term-missing --cov-fail-under=60"

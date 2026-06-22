@@ -1,4 +1,4 @@
-"""Tests for TaskStore persistence."""
+"""Tests for SQLite-backed task store."""
 
 import sqlite3
 from pathlib import Path
@@ -6,201 +6,206 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from aegisvault.api.schemas import ClassificationResult
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 
 
 @pytest.fixture
 def task_store(tmp_path: Path) -> TaskStore:
-    """Isolated task store for tests."""
+    """Fixture providing an isolated TaskStore."""
     return TaskStore(tmp_path / "tasks.db")
 
 
-def test_list_recent_returns_created_tasks(task_store: TaskStore) -> None:
-    """list_recent returns tasks ordered by most recent update."""
+def test_create_task(task_store: TaskStore) -> None:
+    """Creating a task stores an IDLE record."""
     task_id = uuid4()
-    source = Path("/tmp/file.txt")
-    task_store.create(task_id, source)
+    source = Path("/tmp/inbox/file.txt")
 
-    recent = task_store.list_recent(limit=10)
+    status = task_store.create(task_id, source)
 
-    assert len(recent) == 1
-    assert recent[0].task_id == task_id
-    assert recent[0].state == TaskState.IDLE.name
-    assert recent[0].source_path == source
-
-
-def test_list_recent_orders_by_updated_at(task_store: TaskStore) -> None:
-    """list_recent orders tasks by updated_at descending."""
-    first_id = uuid4()
-    second_id = uuid4()
-    task_store.create(first_id, Path("/tmp/first.txt"))
-    task_store.create(second_id, Path("/tmp/second.txt"))
-
-    recent = task_store.list_recent(limit=10)
-
-    assert [task.task_id for task in recent] == [second_id, first_id]
+    assert status.task_id == task_id
+    assert status.state == TaskState.IDLE.name
+    record = task_store.get(task_id)
+    assert record is not None
+    assert record["state"] == TaskState.IDLE.name
+    assert record["source_path"] == str(source)
 
 
-def test_list_recent_respects_limit(task_store: TaskStore) -> None:
-    """list_recent respects the limit parameter."""
-    for i in range(5):
-        task_store.create(uuid4(), Path(f"/tmp/file{i}.txt"))
-
-    recent = task_store.list_recent(limit=3)
-
-    assert len(recent) == 3
-
-
-def test_list_recent_includes_state_and_message(task_store: TaskStore) -> None:
-    """list_recent surfaces the latest state and message."""
+def test_update_state(task_store: TaskStore) -> None:
+    """update_state persists the new state and message."""
     task_id = uuid4()
-    task_store.create(task_id, Path("/tmp/file.txt"))
-    task_store.update_state(task_id, TaskState.ENCRYPTING, "working")
+    task_store.create(task_id, Path("/tmp/inbox/file.txt"))
 
-    recent = task_store.list_recent(limit=1)
+    status = task_store.update_state(task_id, TaskState.CLASSIFYING, "working")
 
-    assert len(recent) == 1
-    assert recent[0].state == TaskState.ENCRYPTING.name
-    assert recent[0].message == "working"
+    assert status.state == TaskState.CLASSIFYING.name
+    assert status.message == "working"
+    record = task_store.get(task_id)
+    assert record is not None
+    assert record["state"] == TaskState.CLASSIFYING.name
+    assert record["message"] == "working"
 
 
-def test_list_recent_source_path_is_optional(task_store: TaskStore) -> None:
-    """list_recent handles tasks with no source_path."""
+def test_update_classification(task_store: TaskStore) -> None:
+    """Classification result is serialized as JSON."""
     task_id = uuid4()
-    conn = sqlite3.connect(task_store.db_path)
-    conn.execute(
-        "INSERT INTO tasks (task_id, state, source_path) VALUES (?, ?, ?)",
-        (str(task_id), TaskState.IDLE.name, None),
+    task_store.create(task_id, Path("/tmp/inbox/file.txt"))
+    classification = ClassificationResult(
+        sensitivity="medium",
+        category="work",
+        disguise_name="report",
+        disguise_extension="log",
     )
-    conn.commit()
-    conn.close()
 
-    recent = task_store.list_recent(limit=1)
+    task_store.update_classification(task_id, classification)
 
-    assert len(recent) == 1
-    assert recent[0].task_id == task_id
-    assert recent[0].source_path is None
+    record = task_store.get(task_id)
+    assert record is not None
+    assert classification.model_dump_json() in str(record["classification"])
 
 
-def test_load_incomplete_unchanged(task_store: TaskStore) -> None:
-    """load_incomplete continues to exclude terminal states."""
-    incomplete_id = uuid4()
-    completed_id = uuid4()
-    task_store.create(incomplete_id, Path("/tmp/incomplete.txt"))
-    task_store.create(completed_id, Path("/tmp/completed.txt"))
-    task_store.update_state(completed_id, TaskState.COMPLETED)
+def test_update_vault_result(task_store: TaskStore) -> None:
+    """Vault encryption metadata is stored."""
+    task_id = uuid4()
+    task_store.create(task_id, Path("/tmp/inbox/file.txt"))
+    vault_path = Path("/vault/work/report.log")
+    salt = b"salt"
+    nonce = b"nonce"
 
-    incomplete = task_store.load_incomplete()
+    task_store.update_vault_result(task_id, vault_path, salt, nonce)
 
-    assert len(incomplete) == 1
-    assert UUID(incomplete[0]["task_id"]) == incomplete_id
-
-
-def test_counts_by_state_returns_empty_dict_for_empty_store(task_store: TaskStore) -> None:
-    """counts_by_state returns an empty dict when no tasks exist."""
-    assert task_store.counts_by_state() == {}
+    record = task_store.get(task_id)
+    assert record is not None
+    assert record["vault_path"] == str(vault_path)
+    assert record["salt"] == salt
+    assert record["nonce"] == nonce
 
 
-def test_counts_by_state_groups_by_state(task_store: TaskStore) -> None:
-    """counts_by_state aggregates tasks by their current state."""
-    idle_id = uuid4()
+def test_get_missing_task(task_store: TaskStore) -> None:
+    """get returns None for unknown task IDs."""
+    assert task_store.get(uuid4()) is None
+
+
+def test_load_incomplete(task_store: TaskStore) -> None:
+    """load_incomplete returns only non-terminal tasks."""
     completed_id = uuid4()
     failed_id = uuid4()
-    task_store.create(idle_id, Path("/tmp/idle.txt"))
-    task_store.create(completed_id, Path("/tmp/done.txt"))
+    active_id = uuid4()
+
+    task_store.create(completed_id, Path("/tmp/a.txt"))
     task_store.update_state(completed_id, TaskState.COMPLETED)
-    task_store.create(failed_id, Path("/tmp/failed.txt"))
+    task_store.create(failed_id, Path("/tmp/b.txt"))
     task_store.update_state(failed_id, TaskState.FAILED)
+    task_store.create(active_id, Path("/tmp/c.txt"))
+    task_store.update_state(active_id, TaskState.CLASSIFYING)
+
+    incomplete = task_store.load_incomplete()
+    ids = {UUID(r["task_id"]) for r in incomplete}
+
+    assert completed_id not in ids
+    assert failed_id not in ids
+    assert active_id in ids
+
+
+def test_counts_by_state(task_store: TaskStore) -> None:
+    """counts_by_state groups tasks by their current state."""
+    task_store.create(uuid4(), Path("/tmp/a.txt"))
+    task_store.create(uuid4(), Path("/tmp/b.txt"))
 
     counts = task_store.counts_by_state()
 
-    assert counts[TaskState.IDLE.name] == 1
-    assert counts[TaskState.COMPLETED.name] == 1
-    assert counts[TaskState.FAILED.name] == 1
+    assert counts.get(TaskState.IDLE.name, 0) == 2
 
 
-def test_list_active_returns_only_non_terminal_states(task_store: TaskStore) -> None:
-    """list_active returns IDLE/CLASSIFYING/ENCRYPTING/INDEXING tasks."""
-    idle_id = uuid4()
-    completed_id = uuid4()
-    failed_id = uuid4()
-    quarantined_id = uuid4()
-    task_store.create(idle_id, Path("/tmp/idle.txt"))
-    task_store.create(completed_id, Path("/tmp/done.txt"))
-    task_store.update_state(completed_id, TaskState.COMPLETED)
-    task_store.create(failed_id, Path("/tmp/failed.txt"))
-    task_store.update_state(failed_id, TaskState.FAILED)
-    task_store.create(quarantined_id, Path("/tmp/bad.txt"))
-    task_store.update_state(quarantined_id, TaskState.QUARANTINED)
+def test_list_active_orders_by_recency(task_store: TaskStore) -> None:
+    """list_active returns the most recently updated active tasks."""
+    first = uuid4()
+    second = uuid4()
+    task_store.create(first, Path("/tmp/a.txt"))
+    task_store.create(second, Path("/tmp/b.txt"))
+    task_store.update_state(second, TaskState.CLASSIFYING)
 
-    active = task_store.list_active(limit=10)
+    active = task_store.list_active(limit=5)
 
-    assert len(active) == 1
-    assert active[0].task_id == idle_id
+    assert len(active) == 2
+    assert active[0].task_id == second
 
 
-def test_list_active_orders_by_updated_at(task_store: TaskStore) -> None:
-    """list_active orders tasks by most recent update."""
-    first_id = uuid4()
-    second_id = uuid4()
-    task_store.create(first_id, Path("/tmp/first.txt"))
-    task_store.create(second_id, Path("/tmp/second.txt"))
+def test_list_attention_includes_failed_and_quarantined(
+    task_store: TaskStore,
+) -> None:
+    """list_attention returns FAILED and QUARANTINED tasks."""
+    failed = uuid4()
+    quarantined = uuid4()
+    task_store.create(failed, Path("/tmp/a.txt"))
+    task_store.update_state(failed, TaskState.FAILED, "boom")
+    task_store.create(quarantined, Path("/tmp/b.txt"))
+    task_store.update_state(quarantined, TaskState.QUARANTINED, "suspicious")
 
-    active = task_store.list_active(limit=10)
+    attention = task_store.list_attention(limit=5)
+    states = {t.state for t in attention}
 
-    assert [task.task_id for task in active] == [second_id, first_id]
-
-
-def test_list_active_respects_limit(task_store: TaskStore) -> None:
-    """list_active respects the limit parameter."""
-    for i in range(5):
-        task_store.create(uuid4(), Path(f"/tmp/file{i}.txt"))
-
-    active = task_store.list_active(limit=3)
-
-    assert len(active) == 3
-
-
-def test_list_attention_returns_failed_and_quarantined(task_store: TaskStore) -> None:
-    """list_attention returns only FAILED and QUARANTINED tasks."""
-    idle_id = uuid4()
-    failed_id = uuid4()
-    quarantined_id = uuid4()
-    task_store.create(idle_id, Path("/tmp/idle.txt"))
-    task_store.create(failed_id, Path("/tmp/failed.txt"))
-    task_store.update_state(failed_id, TaskState.FAILED, "broken")
-    task_store.create(quarantined_id, Path("/tmp/bad.txt"))
-    task_store.update_state(quarantined_id, TaskState.QUARANTINED, "suspicious")
-
-    attention = task_store.list_attention(limit=10)
-
-    assert len(attention) == 2
-    assert {task.task_id for task in attention} == {failed_id, quarantined_id}
-    assert attention[0].state in {TaskState.FAILED.name, TaskState.QUARANTINED.name}
-
-
-def test_list_attention_orders_by_updated_at(task_store: TaskStore) -> None:
-    """list_attention orders tasks by most recent update."""
-    first_id = uuid4()
-    second_id = uuid4()
-    task_store.create(first_id, Path("/tmp/first.txt"))
-    task_store.update_state(first_id, TaskState.FAILED)
-    task_store.create(second_id, Path("/tmp/second.txt"))
-    task_store.update_state(second_id, TaskState.QUARANTINED)
-
-    attention = task_store.list_attention(limit=10)
-
-    assert [task.task_id for task in attention] == [second_id, first_id]
+    assert states == {TaskState.FAILED.name, TaskState.QUARANTINED.name}
 
 
 def test_list_attention_respects_limit(task_store: TaskStore) -> None:
-    """list_attention respects the limit parameter."""
-    for i in range(5):
+    """list_attention honors the limit parameter."""
+    for _ in range(5):
         task_id = uuid4()
-        task_store.create(task_id, Path(f"/tmp/file{i}.txt"))
+        task_store.create(task_id, Path("/tmp/a.txt"))
         task_store.update_state(task_id, TaskState.FAILED)
 
-    attention = task_store.list_attention(limit=3)
+    attention = task_store.list_attention(limit=2)
 
-    assert len(attention) == 3
+    assert len(attention) == 2
+
+
+def test_list_recent_includes_all_states(task_store: TaskStore) -> None:
+    """list_recent returns the most recently updated tasks regardless of state."""
+    first = uuid4()
+    second = uuid4()
+    task_store.create(first, Path("/tmp/a.txt"))
+    task_store.create(second, Path("/tmp/b.txt"))
+    task_store.update_state(first, TaskState.COMPLETED)
+
+    recent = task_store.list_recent(limit=5)
+
+    assert len(recent) == 2
+    assert recent[0].task_id == first
+
+
+def test_fetch_by_states_empty_returns_empty_list(task_store: TaskStore) -> None:
+    """_fetch_by_states returns an empty list when no states are requested."""
+    assert task_store._fetch_by_states(set(), 10) == []
+
+
+def test_init_migrates_legacy_schema(tmp_path: Path) -> None:
+    """TaskStore adds created_at/updated_at columns to legacy tables."""
+    db_path = tmp_path / "legacy.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            source_path TEXT,
+            classification TEXT,
+            vault_path TEXT,
+            salt BLOB,
+            nonce BLOB,
+            message TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.close()
+
+    TaskStore(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    finally:
+        conn.close()
+    assert "created_at" in columns
+    assert "updated_at" in columns

@@ -22,12 +22,87 @@ _REQUIRED_FIELDS = frozenset(
 )
 
 
+def _remove_comments(text: str) -> str:
+    """Remove C/JS style comments without touching quotes."""
+    result: list[str] = []
+    i = 0
+    length = len(text)
+    in_string: str | None = None
+    while i < length:
+        char = text[i]
+        if in_string is None:
+            if char in {'"', "'"}:
+                in_string = char
+                result.append(char)
+            elif char == "/" and i + 1 < length:
+                if text[i + 1] == "/":
+                    while i < length and text[i] != "\n":
+                        i += 1
+                    continue
+                if text[i + 1] == "*":
+                    i += 2
+                    while i + 1 < length and not (text[i] == "*" and text[i + 1] == "/"):
+                        i += 1
+                    i += 2
+                    continue
+                result.append(char)
+            else:
+                result.append(char)
+        else:
+            if char == "\\" and i + 1 < length:
+                result.append(char)
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if char == in_string:
+                in_string = None
+            result.append(char)
+        i += 1
+    return "".join(result)
+
+
+def _remove_trailing_commas(text: str) -> str:
+    """Remove trailing commas before closing braces/brackets."""
+    return re.sub(r",(\s*[}\]])", r"\1", text)
+
+
+def _looks_single_quoted(text: str) -> bool:
+    """Heuristic: text uses single quotes as JSON delimiters."""
+    stripped = text.strip()
+    return stripped.startswith("{") and "'" in stripped and '"' not in stripped
+
+
+def _repair_json(text: str) -> str:
+    """Apply safe repairs to common model JSON mistakes.
+
+    Repairs include: comments, trailing commas, and single-quoted dicts.
+    """
+    cleaned = _remove_comments(text)
+    cleaned = _remove_trailing_commas(cleaned)
+    if _looks_single_quoted(cleaned):
+        cleaned = cleaned.replace("'", '"')
+    return cleaned
+
+
+def _try_load_json(text: str) -> dict[str, Any] | None:
+    """Try parsing JSON, including a repair pass for malformed output."""
+    for candidate in (text, _repair_json(text)):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 def _extract_json(raw: str) -> dict[str, Any]:
     """Extract JSON object from model output, tolerating markdown fences and surrounding prose.
 
     Prefers fenced code blocks that parse to a dict containing required
     classification fields. Falls back to the full output and finally to the
-    first '{' ... '}' substring.
+    first '{' ... '}' substring. A repair pass fixes common model mistakes
+    such as comments, trailing commas, and single quotes.
     """
     cleaned = raw.lstrip("\ufeff").strip()
 
@@ -37,11 +112,8 @@ def _extract_json(raw: str) -> dict[str, Any]:
     best_score = -1
     for match in _FENCE_RE.finditer(cleaned):
         candidate = match.group(1).strip()
-        try:
-            data = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict):
+        data = _try_load_json(candidate)
+        if data is not None:
             score = len(_REQUIRED_FIELDS & data.keys())
             if score > best_score:
                 best_score = score
@@ -49,30 +121,44 @@ def _extract_json(raw: str) -> dict[str, Any]:
     if best_block is not None:
         return best_block
 
-    # 2. Try the cleaned output as-is.
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        # 3. Fall back to the first '{' and last '}'.
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            snippet = raw[:500]
-            raise ValueError(
-                f"No valid JSON object found in model output: {snippet!r}"
-            ) from exc
-        try:
-            data = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as inner:
-            snippet = raw[:500]
-            raise ValueError(
-                f"Failed to parse JSON from model output: {snippet!r}"
-            ) from inner
+    # 2. Try the cleaned output as-is (with repair fallback).
+    data = _try_load_json(cleaned)
+    if data is not None:
+        return data
 
-    if not isinstance(data, dict):
+    # 3. Fall back to the first '{' and last '}'.
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
         snippet = raw[:500]
-        raise ValueError(f"Model output did not contain a JSON object: {snippet!r}")
-    return data
+        raise ValueError(f"No valid JSON object found in model output: {snippet!r}")
+    data = _try_load_json(cleaned[start : end + 1])
+    if data is not None:
+        return data
+
+    snippet = raw[:500]
+    raise ValueError(f"Failed to parse JSON from model output: {snippet!r}")
+
+
+def _normalize_classification_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize extracted classification data before schema validation.
+
+    Handles missing optional fields and common formatting inconsistencies.
+    """
+    normalized = dict(data)
+    if isinstance(normalized.get("sensitivity"), str):
+        normalized["sensitivity"] = normalized["sensitivity"].strip().lower()
+    if normalized.get("category") and isinstance(normalized.get("category"), str):
+        normalized["category"] = normalized["category"].strip().lower()
+    if normalized.get("tags") is None:
+        normalized["tags"] = []
+    if normalized.get("summary") is None:
+        normalized["summary"] = ""
+    if isinstance(normalized.get("disguise_name"), str):
+        normalized["disguise_name"] = normalized["disguise_name"].strip()
+    if isinstance(normalized.get("disguise_extension"), str):
+        normalized["disguise_extension"] = normalized["disguise_extension"].strip()
+    return normalized
 
 
 CLASSIFICATION_PROMPT = """You are a private content classifier for AegisVault.
@@ -102,9 +188,15 @@ File size: {size} bytes
 class Classifier:
     """Classify files using a managed model connection."""
 
-    def __init__(self, provider: ModelProvider, connection: Connection) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        connection: Connection,
+        prompt_template: str = CLASSIFICATION_PROMPT,
+    ) -> None:
         self.provider = provider
         self.connection = connection
+        self.prompt_template = prompt_template
 
     @classmethod
     def from_manager(
@@ -138,7 +230,7 @@ class Classifier:
 
     async def classify(self, path: Path) -> ClassificationResult:
         """Classify a file by path."""
-        prompt = CLASSIFICATION_PROMPT.format(
+        prompt = self.prompt_template.format(
             filename=path.name,
             size=path.stat().st_size,
         )
@@ -147,5 +239,5 @@ class Classifier:
             {"role": "user", "content": prompt},
         ]
         raw = await self.provider.chat_completion(messages)
-        data = _extract_json(raw)
+        data = _normalize_classification_data(_extract_json(raw))
         return ClassificationResult(**data)

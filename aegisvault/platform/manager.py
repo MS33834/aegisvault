@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from aegisvault.model import ModelProvider
 from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.platform.secure_storage import seal_dict, unseal_dict
 
@@ -15,10 +17,15 @@ SENSITIVE_FIELDS = {"api_key", "password"}
 class ConnectionManager:
     """CRUD + test platform connections."""
 
-    def __init__(self, storage_path: Path) -> None:
+    def __init__(
+        self,
+        storage_path: Path,
+        provider_factory: Callable[[Connection], ModelProvider] | None = None,
+    ) -> None:
         self.storage_path = storage_path
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._connections: dict[UUID, Connection] = {}
+        self._provider_factory = provider_factory
         self._load()
 
     def add(self, connection: Connection) -> Connection:
@@ -63,6 +70,19 @@ class ConnectionManager:
                 return conn
         return None
 
+    def _create_provider(self, connection: Connection) -> ModelProvider:
+        """Create a model provider for the given connection.
+
+        Uses the injected factory if available; otherwise falls back to the
+        global provider registry. The lazy import keeps the platform layer
+        decoupled from the model layer when a factory is supplied.
+        """
+        if self._provider_factory is not None:
+            return self._provider_factory(connection)
+        from aegisvault.model import create_provider
+
+        return create_provider(connection)
+
     def test_connection(self, connection_id: UUID) -> tuple[bool, str]:
         """Test a connection synchronously.
 
@@ -72,9 +92,7 @@ class ConnectionManager:
         if conn is None:
             return False, "Connection not found"
 
-        from aegisvault.model import create_provider
-
-        provider = create_provider(conn)
+        provider = self._create_provider(conn)
         try:
             healthy = asyncio.run(provider.health())
             if healthy:

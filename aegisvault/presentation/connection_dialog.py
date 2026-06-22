@@ -57,9 +57,7 @@ class ConnectionEditDialog(QDialog):
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("Only for basic auth")
         self.local_check = QCheckBox("Local connection (127.0.0.1 / localhost)")
-        self.local_check.setToolTip(
-            "Sensitive tasks require a trusted local connection."
-        )
+        self.local_check.setToolTip("Sensitive tasks require a trusted local connection.")
         self.cloud_auth_check = QCheckBox("Authorize for cloud fallback")
         self.cloud_auth_check.setToolTip(
             "Allow this connection for non-sensitive tasks when no local model is available."
@@ -117,13 +115,9 @@ class ConnectionEditDialog(QDialog):
         self._set_error_style(self.base_url_input, not base_url)
         return bool(name and base_url)
 
-    def accept(self) -> None:
-        """Save connection and close."""
-        if not self._validate_required():
-            QMessageBox.warning(self, "Validation", "Name and Base URL are required.")
-            return
-
-        data: dict[str, Any] = {
+    def _connection_from_form(self) -> dict[str, Any]:
+        """Return a data dictionary representing the current form values."""
+        return {
             "name": self.name_input.text().strip(),
             "platform_type": PlatformType(self.platform_combo.currentText()),
             "base_url": self.base_url_input.text().strip(),
@@ -135,6 +129,14 @@ class ConnectionEditDialog(QDialog):
             "is_local": self.local_check.isChecked(),
             "is_cloud_authorized": self.cloud_auth_check.isChecked(),
         }
+
+    def accept(self) -> None:
+        """Save connection and close."""
+        if not self._validate_required():
+            QMessageBox.warning(self, "Validation", "Name and Base URL are required.")
+            return
+
+        data = self._connection_from_form()
 
         if self.connection:
             updated = self.connection.model_copy(update=data)
@@ -168,10 +170,10 @@ class ConnectionManagerDialog(QDialog):
         layout.addWidget(self.table)
 
         button_layout = QHBoxLayout()
-        self.add_button = QPushButton("Add")
-        self.edit_button = QPushButton("Edit")
-        self.delete_button = QPushButton("Delete")
-        self.test_button = QPushButton("Test")
+        self.add_button = QPushButton("➕ Add")
+        self.edit_button = QPushButton("✏️ Edit")
+        self.delete_button = QPushButton("🗑️ Delete")
+        self.test_button = QPushButton("🧪 Test")
 
         self.add_button.clicked.connect(self._add_connection)
         self.edit_button.clicked.connect(self._edit_connection)

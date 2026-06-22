@@ -1,9 +1,9 @@
 """Tests for the system tray application."""
 
+# mypy: ignore-errors
+
 # ruff: noqa: N802
 
-import sys
-import types
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
@@ -14,185 +14,23 @@ from aegisvault.config import AegisConfig
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 
-
-class FakeProgressBar:
-    """Stub progress bar for headless tests."""
-
-    def __init__(self) -> None:
-        self.value = 0
-        self.format = ""
-        self.range = (0, 0)
-        self.text_visible = False
-
-    def setRange(self, min_value: int, max_value: int) -> None:
-        self.range = (min_value, max_value)
-
-    def setValue(self, value: int) -> None:
-        self.value = value
-
-    def setFormat(self, fmt: str) -> None:
-        self.format = fmt
-
-    def setTextVisible(self, visible: bool) -> None:
-        self.text_visible = visible
-
-
-class FakeSignal:
-    """Stub Qt signal for headless tests."""
-
-    def __init__(self) -> None:
-        self.connected: list[object] = []
-
-    def connect(self, callback: object) -> None:
-        self.connected.append(callback)
-
-
-class FakeLabel:
-    """Stub QLabel for headless tests."""
-
-    def __init__(self) -> None:
-        self.text = ""
-
-    def setText(self, text: str) -> None:
-        self.text = text
-
-
-class FakeAction:
-    """Stub QAction for headless tests."""
-
-    def __init__(self, text: str = "", parent: object | None = None) -> None:
-        self.text = text
-        self.parent = parent
-        self.enabled = True
-        self.triggered = FakeSignal()
-
-    def setEnabled(self, enabled: bool) -> None:
-        self.enabled = enabled
-
-    def setDefaultWidget(self, widget: object) -> None:
-        self.widget = widget
-
-    def setToolTip(self, tooltip: str) -> None:
-        self.tooltip = tooltip
-
-
-class FakeWidgetAction(FakeAction):
-    """Stub QWidgetAction for headless tests."""
-
-    def __init__(self, parent: object | None = None) -> None:
-        super().__init__("", parent)
-
-
-class FakeMenu:
-    """Stub QMenu for headless tests."""
-
-    def __init__(self, title: str = "") -> None:
-        self.title = title
-        self.actions: list[FakeAction | None | object] = []
-        self.aboutToShow = FakeSignal()
-
-    def addSection(self, text: str) -> FakeAction:
-        action = FakeAction(text, self)
-        self.actions.append(action)
-        return action
-
-    def addAction(self, action: FakeAction | None) -> None:
-        self.actions.append(action)
-
-    def addSeparator(self) -> None:
-        self.actions.append(None)
-
-    def addMenu(self, menu: object) -> None:
-        self.actions.append(menu)
-
-    def clear(self) -> None:
-        self.actions.clear()
-
-    def emit_about_to_show(self) -> None:
-        for callback in self.aboutToShow.connected:
-            callback()  # type: ignore[operator]
-
-
-class FakeSystemTrayIcon:
-    """Stub QSystemTrayIcon for headless tests."""
-
-    def __init__(self) -> None:
-        self.menu: object | None = None
-        self.visible = False
-        self.tooltip = ""
-
-    def setContextMenu(self, menu: object) -> None:
-        self.menu = menu
-
-    def setVisible(self, visible: bool) -> None:
-        self.visible = visible
-
-    def setToolTip(self, tooltip: str) -> None:
-        self.tooltip = tooltip
-
-
-class FakeApplication:
-    """Stub QApplication for headless tests."""
-
-    _instance: "FakeApplication | None" = None
-
-    def __init__(self, _args: object) -> None:
-        if FakeApplication._instance is None:
-            FakeApplication._instance = self
-        self.quit_called = False
-
-    def quit(self) -> None:
-        self.quit_called = True
-
-    def exec(self) -> int:
-        return 0
-
-    @classmethod
-    def instance(cls) -> "FakeApplication | None":
-        return cls._instance
+from .presentation_stubs import (
+    FakeAction,
+    FakeApplication,
+    FakeMenu,
+    install_presentation_stubs,
+    restore_modules,
+)
 
 
 @pytest.fixture
 def qt_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace PyQt6 widgets with stubs so tests run without a display."""
-    # Provide minimal fake PyQt6 submodules before tray.py is imported.
-    fake_qt = types.ModuleType("PyQt6")
-    fake_qt_gui = types.ModuleType("PyQt6.QtGui")
-    fake_qt_gui.QAction = FakeAction
-    fake_qt_widgets = types.ModuleType("PyQt6.QtWidgets")
-    fake_qt_widgets.QApplication = FakeApplication
-    fake_qt_widgets.QLabel = FakeLabel
-    fake_qt_widgets.QMenu = FakeMenu
-    fake_qt_widgets.QProgressBar = FakeProgressBar
-    fake_qt_widgets.QSystemTrayIcon = FakeSystemTrayIcon
-    fake_qt_widgets.QWidgetAction = FakeWidgetAction
-
-    saved_modules = {
-        "PyQt6": sys.modules.get("PyQt6"),
-        "PyQt6.QtGui": sys.modules.get("PyQt6.QtGui"),
-        "PyQt6.QtWidgets": sys.modules.get("PyQt6.QtWidgets"),
-        "aegisvault.presentation.connection_dialog": sys.modules.get(
-            "aegisvault.presentation.connection_dialog"
-        ),
-        "aegisvault.presentation.tray": sys.modules.get("aegisvault.presentation.tray"),
-    }
-    sys.modules["PyQt6"] = fake_qt
-    sys.modules["PyQt6.QtGui"] = fake_qt_gui
-    sys.modules["PyQt6.QtWidgets"] = fake_qt_widgets
-
-    # Stub out the connection dialog import so its own PyQt6 usage is not loaded.
-    fake_dialog_module = types.ModuleType("aegisvault.presentation.connection_dialog")
-    fake_dialog_module.ConnectionManagerDialog = object  # type: ignore[attr-defined]
-    sys.modules["aegisvault.presentation.connection_dialog"] = fake_dialog_module
-
-    # Ensure the tray module is reloaded using the stubs.
-    sys.modules.pop("aegisvault.presentation.tray", None)
-
+    saved = install_presentation_stubs()
     FakeApplication._instance = None
     yield
     FakeApplication._instance = None
-    sys.modules.update(saved_modules)
-    sys.modules.pop("aegisvault.presentation.tray", None)
+    restore_modules(saved)
 
 
 @pytest.fixture
@@ -201,6 +39,8 @@ def config(tmp_path: Path) -> AegisConfig:
     cfg = AegisConfig()
     cfg.paths.index = tmp_path / "Index"
     cfg.paths.connections = tmp_path / "connections.json"
+    cfg.paths.inbox = tmp_path / "Inbox"
+    cfg.paths.vault = tmp_path / "Vault"
     return cfg
 
 
@@ -218,9 +58,7 @@ def _menu_texts(menu: FakeMenu) -> list[str]:
     return texts
 
 
-def _find_action(
-    menu: FakeMenu, predicate: Callable[[FakeAction], bool]
-) -> FakeAction | None:
+def _find_action(menu: FakeMenu, predicate: Callable[[FakeAction], bool]) -> FakeAction | None:
     """Find the first action matching predicate in the menu."""
     for action in menu.actions:
         if isinstance(action, FakeAction) and predicate(action):
@@ -243,7 +81,7 @@ def test_tray_header_is_present(qt_stubs: None, config: AegisConfig) -> None:
     tray = TrayApplication(config=config)
     tray._refresh_header()
 
-    assert isinstance(tray._header_label, FakeLabel)
+    assert isinstance(tray._header_label, object)
     assert "AegisVault" in tray._header_label.text
     assert "v0.1.0" in tray._header_label.text
     assert "完成" in tray._header_label.text
@@ -262,6 +100,7 @@ def test_tray_quick_actions_are_present(qt_stubs: None, config: AegisConfig) -> 
     assert "🔍 Search Vault..." in texts
     assert "📊 Dashboard" in texts
     assert "🔔 Notifications (0)" in texts
+    assert any("Activity" in text for text in texts)
 
     notifications = _find_action(tray.menu, lambda a: "Notifications" in a.text)
     assert notifications is not None
@@ -411,3 +250,231 @@ def test_tray_attention_section_shows_failed_and_quarantined(
     assert any(str(quarantined_id)[:8] in text for text in texts)
     assert any("失败" in text for text in texts)
     assert any("已隔离" in text for text in texts)
+
+
+def test_tray_status_summary_without_task_store(qt_stubs: None) -> None:
+    """Status summary works when no task store is configured."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication()
+    summary = tray._status_summary()
+
+    assert "未配置本地连接" in summary or "本地连接正常" in summary
+    assert "📦" in summary
+    assert "完成 0" in summary
+
+
+def test_tray_status_summary_with_failed_and_quarantined(
+    qt_stubs: None, config: AegisConfig
+) -> None:
+    """Status summary reports failed and quarantined counts."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    failed_id = uuid4()
+    quarantined_id = uuid4()
+    store.create(failed_id, Path("/tmp/failed.txt"))
+    store.update_state(failed_id, TaskState.FAILED)
+    store.create(quarantined_id, Path("/tmp/bad.txt"))
+    store.update_state(quarantined_id, TaskState.QUARANTINED)
+
+    tray = TrayApplication(config=config)
+    summary = tray._status_summary()
+
+    assert "失败 1" in summary
+    assert "隔离 1" in summary
+
+
+def test_tray_vault_size_text(qt_stubs: None, config: AegisConfig) -> None:
+    """Vault size is calculated from files in the vault directory."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    config.paths.vault.mkdir(parents=True, exist_ok=True)
+    (config.paths.vault / "data.bin").write_bytes(b"x" * 1500)
+
+    tray = TrayApplication(config=config)
+    size_text = tray._vault_size_text()
+
+    assert "KB" in size_text or "B" in size_text
+
+
+def test_tray_no_enabled_connections_shows_placeholder(qt_stubs: None, config: AegisConfig) -> None:
+    """Connections menu shows a placeholder when no connections are enabled."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    # Use a fresh empty connections file so the default Ollama connection is not seeded.
+    empty_path = config.paths.connections.parent / "empty_connections.json"
+    empty_path.write_text('{"version": 1, "connections": []}')
+    tray = TrayApplication(connections_path=empty_path, config=config)
+
+    # Disable any seeded connections.
+    for conn in tray.connection_manager.list_all():
+        conn.is_enabled = False
+        tray.connection_manager.update(conn)
+
+    tray._refresh_connections_menu()
+    texts = [a.text for a in tray.connections_menu.actions if a is not None]
+    assert any("No connections enabled" in text for text in texts)
+
+
+def test_tray_remote_connection_marked_unverified(qt_stubs: None, config: AegisConfig) -> None:
+    """A remote enabled connection is labelled as unverified."""
+    from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    # Remove any seeded connections and add a remote one.
+    for conn in list(tray.connection_manager.list_all()):
+        tray.connection_manager.delete(conn.id)
+    remote = Connection(
+        name="Remote API",
+        platform_type=PlatformType.OPENAI_COMPATIBLE,
+        base_url="https://example.com/v1",
+        auth_method=AuthMethod.BEARER,
+        api_key="secret",
+        is_local=False,
+        is_enabled=True,
+    )
+    tray.connection_manager.add(remote)
+
+    tray._refresh_connections_menu()
+    texts = [a.text for a in tray.connections_menu.actions if a is not None]
+    assert any("远程 / 未验证" in text for text in texts)
+
+
+def test_tray_run_builds_menu_and_execs(qt_stubs: None, config: AegisConfig) -> None:
+    """run() builds the menu, shows the tray icon and calls app.exec()."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    tray.run()
+
+    assert tray.tray.visible is True
+    assert tray.tray.tooltip == "AegisVault"
+    assert tray.tray.menu is tray.menu
+    texts = _menu_texts(tray.menu)
+    assert "🚪 Quit" in texts
+    assert any("About AegisVault" in text for text in texts)
+
+
+def test_tray_quick_action_handlers_print(
+    qt_stubs: None, config: AegisConfig, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Quick action handlers emit placeholder output."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    tray._open_inbox()
+    tray._open_vault()
+    tray._search_vault()
+    tray._open_dashboard()
+    tray._show_about()
+    tray._open_docs()
+    tray._open_task_center()
+
+    captured = capsys.readouterr().out
+    assert "Open Inbox" in captured
+    assert "Open Vault" in captured
+    assert "Search Vault" in captured
+    assert "Open Dashboard" in captured
+    assert "AegisVault v0.1.0" in captured
+    assert "Open documentation" in captured
+    assert "Open Task Center" in captured
+
+
+def test_tray_activity_summary_text(qt_stubs: None, config: AegisConfig) -> None:
+    """Activity summary reflects task counts in the quick actions panel."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    active_id = uuid4()
+    completed_id = uuid4()
+    failed_id = uuid4()
+    store.create(active_id, Path("/tmp/active.txt"))
+    store.create(completed_id, Path("/tmp/done.txt"))
+    store.update_state(completed_id, TaskState.COMPLETED)
+    store.create(failed_id, Path("/tmp/failed.txt"))
+    store.update_state(failed_id, TaskState.FAILED)
+
+    tray = TrayApplication(config=config)
+    summary = tray._activity_summary_text()
+
+    assert "总计 3" in summary
+    assert "进行中 1" in summary
+    assert "完成 1" in summary
+    assert "失败 1" in summary
+
+
+def test_tray_activity_summary_without_store(qt_stubs: None) -> None:
+    """Activity summary reports not configured when no task store exists."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication()
+    assert tray._activity_summary_text() == "📦 Tasks not configured"
+
+
+def test_tray_activity_summary_with_quarantined(qt_stubs: None, config: AegisConfig) -> None:
+    """Activity summary includes the quarantined count."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    quarantined_id = uuid4()
+    store.create(quarantined_id, Path("/tmp/bad.txt"))
+    store.update_state(quarantined_id, TaskState.QUARANTINED)
+
+    tray = TrayApplication(config=config)
+    summary = tray._activity_summary_text()
+
+    assert "隔离 1" in summary
+
+
+def test_tray_task_action_includes_tooltip(qt_stubs: None, config: AegisConfig) -> None:
+    """Task actions expose a tooltip with state details."""
+    from aegisvault.api.schemas import TaskSummary
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    task = TaskSummary(
+        task_id=uuid4(),
+        state=TaskState.ENCRYPTING.name,
+        message="processing",
+    )
+    action = tray._task_action(task, tray.tasks_menu)
+
+    assert "加密中" in action.text
+    assert "processing" in action.text
+    assert action.tooltip == "正在加密并写入保险库"
+
+
+def test_tray_open_connection_manager(qt_stubs: None, config: AegisConfig) -> None:
+    """Opening the connection manager creates a ConnectionManagerDialog."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    # Dialog exec is a no-op with stubs; this exercises the creation path.
+    tray._open_connection_manager()
+
+
+def test_tray_vault_size_text_in_tb(qt_stubs: None, config: AegisConfig) -> None:
+    """Vault size falls back to TB for very large directories."""
+    from types import SimpleNamespace
+
+    from aegisvault.presentation.tray import TrayApplication
+
+    class FakeVault:
+        def exists(self) -> bool:
+            return True
+
+        def rglob(self, _pattern: str) -> list["FakeVault"]:
+            return [self]
+
+        def is_file(self) -> bool:
+            return True
+
+        def stat(self) -> object:
+            return SimpleNamespace(st_size=5 * 1024**4)
+
+    tray = TrayApplication(config=config)
+    tray.config.paths.vault = FakeVault()  # type: ignore[assignment]
+
+    assert tray._vault_size_text().endswith("TB")

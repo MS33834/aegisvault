@@ -1,6 +1,7 @@
 """Task state machine for AegisVault."""
 
 from enum import Enum, auto
+from typing import ClassVar
 from uuid import UUID
 
 from aegisvault.api.schemas import TaskStatus
@@ -21,10 +22,10 @@ class TaskState(Enum):
 class StateMachine:
     """Simple finite state machine for tasks."""
 
-    ALLOWED_TRANSITIONS: dict[TaskState, set[TaskState]] = {
+    ALLOWED_TRANSITIONS: ClassVar[dict[TaskState, set[TaskState]]] = {
         TaskState.IDLE: {TaskState.CLASSIFYING},
         TaskState.CLASSIFYING: {TaskState.ENCRYPTING, TaskState.QUARANTINED, TaskState.FAILED},
-        TaskState.ENCRYPTING: {TaskState.INDEXING, TaskState.FAILED},
+        TaskState.ENCRYPTING: {TaskState.INDEXING, TaskState.QUARANTINED, TaskState.FAILED},
         TaskState.INDEXING: {TaskState.COMPLETED, TaskState.FAILED},
         TaskState.COMPLETED: set(),
         TaskState.FAILED: set(),
@@ -38,9 +39,7 @@ class StateMachine:
     def transition(self, new_state: TaskState) -> TaskStatus:
         """Transition to a new state if allowed."""
         if new_state not in self.ALLOWED_TRANSITIONS[self.state]:
-            raise ValueError(
-                f"Invalid transition from {self.state.name} to {new_state.name}"
-            )
+            raise ValueError(f"Invalid transition from {self.state.name} to {new_state.name}")
         self.state = new_state
         return TaskStatus(task_id=self.task_id, state=self.state.name)
 

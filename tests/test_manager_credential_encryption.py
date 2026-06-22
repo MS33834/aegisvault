@@ -24,9 +24,7 @@ def _find_connection_by_name(manager: ConnectionManager, name: str) -> Connectio
     return None
 
 
-def test_api_key_is_sealed_on_disk(
-    tmp_path: Path, isolated_storage_key: Path
-) -> None:
+def test_api_key_is_sealed_on_disk(tmp_path: Path, isolated_storage_key: Path) -> None:
     """API key must be sealed (prefixed) in the connections file."""
     storage = tmp_path / "connections.json"
     manager = ConnectionManager(storage)
@@ -46,9 +44,7 @@ def test_api_key_is_sealed_on_disk(
     assert "aes:" in raw_text or "dpapi:" in raw_text
 
 
-def test_api_key_roundtrip(
-    tmp_path: Path, isolated_storage_key: Path
-) -> None:
+def test_api_key_roundtrip(tmp_path: Path, isolated_storage_key: Path) -> None:
     """API key is decrypted correctly when loading the manager."""
     storage = tmp_path / "connections.json"
     manager = ConnectionManager(storage)

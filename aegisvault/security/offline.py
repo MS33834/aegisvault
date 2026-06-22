@@ -49,12 +49,7 @@ def _parse_linux_tcp(
                 continue
             local_ip, local_port = _parse_proc_net_addr(local_hex)
             remote_ip, remote_port = _parse_proc_net_addr(remote_hex)
-            if (
-                local_ip is None
-                or local_port is None
-                or remote_ip is None
-                or remote_port is None
-            ):
+            if local_ip is None or local_port is None or remote_ip is None or remote_port is None:
                 continue
             connections.append((local_ip, local_port, remote_ip, remote_port))
     return connections

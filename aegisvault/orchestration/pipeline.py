@@ -1,7 +1,7 @@
 """End-to-end file processing pipeline: Inbox -> Classify -> Encrypt -> Vault."""
 
+import logging
 import os
-import traceback
 from pathlib import Path
 from uuid import UUID
 
@@ -16,7 +16,9 @@ from aegisvault.execution.vault import VaultManager
 from aegisvault.model.classifier import Classifier
 from aegisvault.orchestration.state_machine import StateMachine, TaskState
 from aegisvault.orchestration.task_store import TaskStore
-from aegisvault.security.policy import SecurityPolicyError
+from aegisvault.security.policy import SecurityPolicyError, require_trusted_local_connection
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessingPipeline:
@@ -51,9 +53,7 @@ class ProcessingPipeline:
             sm.transition(TaskState.ENCRYPTING)
             self.task_store.update_state(task_id, TaskState.ENCRYPTING)
 
-            result = self._encrypt(
-                event.source_path, classification, task_id
-            )
+            result = self._encrypt(event.source_path, classification, task_id)
             self.task_store.update_vault_result(
                 task_id, result.vault_path, result.salt, result.nonce
             )
@@ -72,8 +72,8 @@ class ProcessingPipeline:
             return self.task_store.update_state(task_id, TaskState.QUARANTINED, str(exc))
         except Exception as exc:  # noqa: BLE001
             sm.transition(TaskState.FAILED)
-            message = f"{exc}\n{traceback.format_exc()}"
-            return self.task_store.update_state(task_id, TaskState.FAILED, message)
+            logger.exception("Pipeline failed for task %s", task_id)
+            return self.task_store.update_state(task_id, TaskState.FAILED, str(exc))
 
     async def _classify(self, source_path: Path) -> ClassificationResult:
         """Classify the file using the configured model connection."""
@@ -85,9 +85,9 @@ class ProcessingPipeline:
         classification: ClassificationResult,
         task_id: UUID,
     ) -> EncryptResult:
-        """Encrypt file into Vault using the same connection context."""
+        """Encrypt file into Vault after validating the connection is trusted local."""
+        require_trusted_local_connection(self.classifier.connection)
         encrypt_result = self.vault_manager.encrypt(
-            self.classifier.connection,
             source_path,
             classification,
             str(task_id),

@@ -1,6 +1,7 @@
 """Tests for platform connection manager."""
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -84,3 +85,167 @@ def test_update_connection(manager: ConnectionManager) -> None:
 
     reloaded = ConnectionManager(manager.storage_path)
     assert reloaded.get(conn.id).model_name == "qwen2.5:14b"  # type: ignore[union-attr]
+
+
+def test_update_unknown_connection_raises_key_error(manager: ConnectionManager) -> None:
+    """Updating a non-existent connection raises KeyError."""
+    unknown = Connection(
+        id=uuid4(),
+        name="Unknown",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+    )
+    with pytest.raises(KeyError, match="not found"):
+        manager.update(unknown)
+
+
+def test_get_returns_connection_by_id(manager: ConnectionManager) -> None:
+    """get fetches a connection by its UUID."""
+    conn = manager.list_all()[0]
+    assert manager.get(conn.id) == conn
+
+
+def test_get_missing_connection_returns_none(manager: ConnectionManager) -> None:
+    """get returns None for an unknown connection ID."""
+    assert manager.get(uuid4()) is None
+
+
+def test_list_enabled_filters_disabled_connections(manager: ConnectionManager) -> None:
+    """list_enabled returns only enabled connections."""
+    enabled = Connection(
+        name="Enabled",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_enabled=True,
+    )
+    disabled = Connection(
+        name="Disabled",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_enabled=False,
+    )
+    manager.add(enabled)
+    manager.add(disabled)
+
+    enabled_conns = manager.list_enabled()
+    assert enabled in enabled_conns
+    assert disabled not in enabled_conns
+
+
+def test_delete_removes_connection(manager: ConnectionManager) -> None:
+    """delete removes a connection and persists the change."""
+    conn = manager.list_all()[0]
+    manager.delete(conn.id)
+
+    assert manager.get(conn.id) is None
+    reloaded = ConnectionManager(manager.storage_path)
+    assert reloaded.get(conn.id) is None
+
+
+def test_delete_unknown_connection_is_no_op(manager: ConnectionManager) -> None:
+    """delete silently ignores unknown connection IDs."""
+    manager.delete(uuid4())
+    assert len(manager.list_all()) == 1
+
+
+def test_get_default_chat_connection_prefers_enabled_chat(
+    manager: ConnectionManager,
+) -> None:
+    """get_default_chat_connection returns the highest-priority enabled chat connection."""
+    chat_conn = Connection(
+        name="Chat",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_enabled=True,
+        capabilities=["chat"],
+        priority=20,
+    )
+    disabled_chat = Connection(
+        name="Disabled Chat",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_enabled=False,
+        capabilities=["chat"],
+        priority=30,
+    )
+    no_chat = Connection(
+        name="No Chat",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        capabilities=["embed"],
+        priority=30,
+    )
+    manager.add(chat_conn)
+    manager.add(disabled_chat)
+    manager.add(no_chat)
+
+    default = manager.get_default_chat_connection()
+    assert default == chat_conn
+
+
+def test_get_default_chat_connection_returns_none_when_unavailable(
+    manager: ConnectionManager,
+) -> None:
+    """get_default_chat_connection returns None when no chat connection is enabled."""
+    for conn in manager.list_all():
+        conn = conn.model_copy(update={"capabilities": ["embed"]})
+        manager.update(conn)
+
+    assert manager.get_default_chat_connection() is None
+
+
+def test_test_connection_success(tmp_path: Path) -> None:
+    """test_connection reports success when the provider is healthy."""
+    storage = tmp_path / "connections.json"
+
+    class FakeProvider:
+        async def health(self) -> bool:
+            return True
+
+        async def close(self) -> None:
+            pass
+
+    manager = ConnectionManager(storage, provider_factory=lambda _conn: FakeProvider())
+    conn = Connection(
+        name="Healthy",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_local=True,
+    )
+    manager.add(conn)
+
+    success, message = manager.test_connection(conn.id)
+    assert success is True
+    assert "Connected" in message
+
+
+def test_test_connection_failure(tmp_path: Path) -> None:
+    """test_connection reports failure when the provider raises an exception."""
+    storage = tmp_path / "connections.json"
+
+    class FakeProvider:
+        async def health(self) -> bool:
+            raise ConnectionRefusedError("refused")
+
+        async def close(self) -> None:
+            pass
+
+    manager = ConnectionManager(storage, provider_factory=lambda _conn: FakeProvider())
+    conn = Connection(
+        name="Unhealthy",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_local=True,
+    )
+    manager.add(conn)
+
+    success, message = manager.test_connection(conn.id)
+    assert success is False
+    assert "refused" in message
+
+
+def test_test_connection_missing_connection(manager: ConnectionManager) -> None:
+    """test_connection returns a clear message for unknown connection IDs."""
+    success, message = manager.test_connection(uuid4())
+    assert success is False
+    assert "not found" in message

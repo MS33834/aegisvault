@@ -25,9 +25,7 @@ class AegisAgent:
         vault_manager: VaultManager | None = None,
     ) -> None:
         self.config = config
-        self.connection_manager = connection_manager or ConnectionManager(
-            config.paths.connections
-        )
+        self.connection_manager = connection_manager or ConnectionManager(config.paths.connections)
         self.task_store = task_store or TaskStore(config.paths.index / "tasks.db")
         self.classifier = classifier or Classifier.from_manager(self.connection_manager)
         self.master_key_provider = master_key_provider or create_master_key_provider(

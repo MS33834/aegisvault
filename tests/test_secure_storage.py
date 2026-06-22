@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,7 +10,9 @@ from aegisvault.platform.secure_storage import (
     _key_file_path,
     _load_or_create_fallback_key,
     seal,
+    seal_dict,
     unseal,
+    unseal_dict,
 )
 
 
@@ -20,9 +22,7 @@ def isolated_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     key_path = tmp_path / "storage.key"
     monkeypatch.setenv("AEGISVAULT_STORAGE_KEY_FILE", str(key_path))
     # Force re-evaluation of the cached module-level default by patching the helper.
-    monkeypatch.setattr(
-        "aegisvault.platform.secure_storage._DEFAULT_KEY_PATH", key_path
-    )
+    monkeypatch.setattr("aegisvault.platform.secure_storage._DEFAULT_KEY_PATH", key_path)
     return key_path
 
 
@@ -49,20 +49,15 @@ def test_fallback_key_is_persistent(isolated_key_file: Path) -> None:
     assert isolated_key_file.exists()
 
 
-def test_fallback_key_warns_on_permissive_permissions(
+def test_fallback_key_rejects_permissive_permissions(
     isolated_key_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A warning is emitted when the key file has group/other read permissions."""
+    """An error is raised when the key file has group/other read permissions."""
     isolated_key_file.write_bytes(os.urandom(32))
     isolated_key_file.chmod(0o644)
 
-    with patch(
-        "aegisvault.platform.secure_storage.logger.warning"
-    ) as mock_warning:
+    with pytest.raises(RuntimeError, match="overly permissive"):
         _load_or_create_fallback_key()
-
-    mock_warning.assert_called_once()
-    assert "permissive" in mock_warning.call_args[0][0]
 
 
 def test_unknown_format_passthrough() -> None:
@@ -70,10 +65,68 @@ def test_unknown_format_passthrough() -> None:
     assert unseal("raw-value") == "raw-value"
 
 
-def test_key_file_path_respects_env_var(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_key_file_path_respects_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AEGISVAULT_STORAGE_KEY_FILE overrides the default key file path."""
     custom = tmp_path / "custom.key"
     monkeypatch.setenv("AEGISVAULT_STORAGE_KEY_FILE", str(custom))
     assert _key_file_path() == custom
+
+
+def test_seal_dict_encrypts_only_target_fields(isolated_key_file: Path) -> None:
+    """seal_dict only encrypts the requested string fields."""
+    data = {
+        "api_key": "secret-key",
+        "name": "Public Name",
+        "password": "secret-password",
+        "timeout": 30,
+    }
+    sealed = seal_dict(data, {"api_key", "password"})
+    assert sealed["api_key"].startswith("aes:")
+    assert sealed["password"].startswith("aes:")
+    assert sealed["name"] == "Public Name"
+    assert sealed["timeout"] == 30
+
+
+def test_unseal_dict_restores_target_fields(isolated_key_file: Path) -> None:
+    """unseal_dict decrypts the requested string fields."""
+    data = {
+        "api_key": seal("secret-key"),
+        "password": seal("secret-password"),
+        "name": "Public Name",
+    }
+    unsealed = unseal_dict(data, {"api_key", "password"})
+    assert unsealed["api_key"] == "secret-key"
+    assert unsealed["password"] == "secret-password"
+    assert unsealed["name"] == "Public Name"
+
+
+def test_unseal_dpapi_raises_on_non_windows() -> None:
+    """DPAPI values cannot be unsealed on non-Windows platforms."""
+    with pytest.raises(RuntimeError, match="DPAPI"):
+        unseal("dpapi:ZmFrZWNpcGhlcg==")
+
+
+def test_seal_uses_dpapi_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, seal uses DPAPI and prefixes with 'dpapi:'."""
+    monkeypatch.setattr("aegisvault.platform.secure_storage._is_windows", lambda: True)
+    fake_protected = b"protected-data"
+    mock_protect = MagicMock(return_value=fake_protected)
+    monkeypatch.setattr("aegisvault.security.win_helpers.protect_data", mock_protect)
+
+    result = seal("my-secret")
+
+    assert result.startswith("dpapi:")
+    mock_protect.assert_called_once_with(b"my-secret")
+
+
+def test_unseal_uses_dpapi_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows, unseal uses DPAPI for 'dpapi:' prefixed values."""
+    monkeypatch.setattr("aegisvault.platform.secure_storage._is_windows", lambda: True)
+    fake_unprotected = b"original-secret"
+    mock_unprotect = MagicMock(return_value=fake_unprotected)
+    monkeypatch.setattr("aegisvault.security.win_helpers.unprotect_data", mock_unprotect)
+
+    result = unseal("dpapi:cHJvdGVjdGVkLWRhdGE=")
+
+    assert result == "original-secret"
+    mock_unprotect.assert_called_once()

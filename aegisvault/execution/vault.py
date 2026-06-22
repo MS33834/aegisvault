@@ -1,15 +1,15 @@
 """Vault file operations.
 
-Sensitive operations require a trusted local connection context.
+The execution layer is responsible purely for encryption and storage.
+Security policy enforcement (e.g. trusted-local validation) lives in the
+orchestration layer that calls these primitives.
 """
 
 from pathlib import Path
 
 from aegisvault.api.schemas import ClassificationResult, EncryptResult
-from aegisvault.platform.models import Connection
 from aegisvault.security.crypto import decrypt_file_stream, encrypt_file_stream
 from aegisvault.security.keytree import derive_file_key, generate_salt
-from aegisvault.security.policy import sensitive_operation
 
 
 class VaultManager:
@@ -19,10 +19,8 @@ class VaultManager:
         self.vault_path = vault_path
         self.vault_key = vault_key
 
-    @sensitive_operation
     def encrypt(
         self,
-        connection: Connection,
         source: Path,
         classification: ClassificationResult,
         task_id: str,
@@ -46,10 +44,8 @@ class VaultManager:
             tag=b"",  # GCM tag is appended to ciphertext by AESGCM.
         )
 
-    @sensitive_operation
     def decrypt(
         self,
-        connection: Connection,
         vault_path: Path,
         salt: bytes,
         destination: Path,

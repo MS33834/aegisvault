@@ -1,15 +1,38 @@
 """Tests for Vault sensitive operation policy enforcement."""
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from aegisvault.api.schemas import ClassificationResult
+from aegisvault.api.schemas import ClassificationResult, FileEvent
+from aegisvault.config import AegisConfig
 from aegisvault.execution.vault import VaultManager
+from aegisvault.model.classifier import Classifier
+from aegisvault.model.provider import ModelProvider
+from aegisvault.orchestration.pipeline import ProcessingPipeline
+from aegisvault.orchestration.state_machine import TaskState
+from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.security.keytree import derive_vault_key
-from aegisvault.security.policy import SecurityPolicyError
+from aegisvault.security.policy import SecurityPolicyError, require_trusted_local_connection
+
+
+class FakeProvider(ModelProvider):
+    """Minimal model provider for policy tests."""
+
+    def __init__(self, response: str = "") -> None:
+        self.response = response
+
+    async def chat_completion(self, messages: list[dict[str, object]]) -> str:
+        return self.response
+
+    async def health(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        pass
 
 
 @pytest.fixture
@@ -41,12 +64,37 @@ def cloud_connection() -> Connection:
     )
 
 
-def test_vault_encrypt_rejects_cloud(
+@pytest.fixture
+def classification_response() -> str:
+    """Valid classification JSON for the fake provider."""
+    return json.dumps(
+        {
+            "sensitivity": "low",
+            "category": "other",
+            "tags": [],
+            "summary": "",
+            "disguise_name": "neutral",
+            "disguise_extension": "log",
+        }
+    )
+
+
+def test_require_trusted_local_rejects_cloud(cloud_connection: Connection) -> None:
+    """The security helper rejects cloud connections."""
+    with pytest.raises(SecurityPolicyError):
+        require_trusted_local_connection(cloud_connection)
+
+
+def test_require_trusted_local_accepts_local(local_connection: Connection) -> None:
+    """The security helper accepts trusted local connections."""
+    require_trusted_local_connection(local_connection)
+
+
+def test_vault_encrypt_does_not_require_connection(
     tmp_path: Path,
     vault_key: bytes,
-    cloud_connection: Connection,
 ) -> None:
-    """Vault encryption must reject cloud connections."""
+    """VaultManager is a pure crypto primitive and accepts raw inputs."""
     source = tmp_path / "secret.txt"
     source.write_bytes(b"secret")
     manager = VaultManager(tmp_path / "vault", vault_key)
@@ -57,42 +105,43 @@ def test_vault_encrypt_rejects_cloud(
         disguise_extension="log",
     )
 
-    with pytest.raises(SecurityPolicyError):
-        manager.encrypt(cloud_connection, source, classification, str(uuid4()))
-
-
-def test_vault_decrypt_rejects_cloud(
-    tmp_path: Path,
-    vault_key: bytes,
-    cloud_connection: Connection,
-) -> None:
-    """Vault decryption must reject cloud connections."""
-    manager = VaultManager(tmp_path / "vault", vault_key)
-
-    with pytest.raises(SecurityPolicyError):
-        manager.decrypt(
-            cloud_connection,
-            tmp_path / "fake.vault",
-            b"0" * 32,
-            tmp_path / "out.txt",
-        )
-
-
-def test_vault_encrypt_accepts_local(
-    tmp_path: Path,
-    vault_key: bytes,
-    local_connection: Connection,
-) -> None:
-    """Vault encryption accepts trusted local connections."""
-    source = tmp_path / "secret.txt"
-    source.write_bytes(b"secret")
-    manager = VaultManager(tmp_path / "vault", vault_key)
-    classification = ClassificationResult(
-        sensitivity="low",
-        category="other",
-        disguise_name="neutral",
-        disguise_extension="log",
-    )
-
-    result = manager.encrypt(local_connection, source, classification, str(uuid4()))
+    result = manager.encrypt(source, classification, str(uuid4()))
     assert result.vault_path.exists()
+
+
+def test_vault_decrypt_does_not_require_connection(
+    tmp_path: Path,
+    vault_key: bytes,
+) -> None:
+    """VaultManager.decrypt accepts raw inputs without a Connection."""
+    manager = VaultManager(tmp_path / "vault", vault_key)
+    # Decryption of a non-existent file fails for IO reasons, not policy reasons.
+    with pytest.raises(FileNotFoundError):
+        manager.decrypt(tmp_path / "fake.vault", b"0" * 32, tmp_path / "out.txt")
+
+
+async def test_pipeline_quarantines_cloud_connection(
+    tmp_path: Path,
+    vault_key: bytes,
+    cloud_connection: Connection,
+    classification_response: str,
+) -> None:
+    """Pipeline quarantines a file when the active connection is not trusted local."""
+    config = AegisConfig()
+    config.paths.inbox = tmp_path / "Inbox"
+    config.paths.vault = tmp_path / "Vault"
+    config.paths.index = tmp_path / "Index"
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+
+    source = config.paths.inbox / "secret.txt"
+    source.write_text("secret")
+
+    classifier = Classifier(FakeProvider(classification_response), cloud_connection)
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key)
+
+    event = FileEvent(event_id=uuid4(), source_path=source)
+    status = await pipeline.process(event)
+
+    assert status.state == TaskState.QUARANTINED.name
+    assert source.exists()  # source must not be encrypted/removed

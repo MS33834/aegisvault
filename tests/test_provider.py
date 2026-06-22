@@ -9,10 +9,12 @@ import pytest
 from aegisvault.model.provider import (
     OpenAICompatibleProvider,
     _build_headers,
+    _load_built_in_providers,
+    _load_provider_plugins,
     create_provider,
     register_provider,
 )
-from aegisvault.platform.models import AuthMethod, Connection
+from aegisvault.platform.models import AuthMethod, Connection, PlatformType
 
 
 @pytest.fixture
@@ -20,7 +22,7 @@ def connection() -> Connection:
     """Default local connection fixture."""
     return Connection(
         name="test",
-        platform_type="openai_compatible",
+        platform_type=PlatformType.OPENAI_COMPATIBLE,
         base_url="http://127.0.0.1:1234",
         model_name="test-model",
     )
@@ -39,12 +41,8 @@ def test_create_provider_lists_registered_on_unknown(
     monkeypatch.setattr(
         "aegisvault.model.provider._PROVIDER_REGISTRY", {"other": OpenAICompatibleProvider}
     )
-    monkeypatch.setattr(
-        "aegisvault.model.provider._load_built_in_providers", lambda: None
-    )
-    monkeypatch.setattr(
-        "aegisvault.model.provider._load_provider_plugins", lambda: None
-    )
+    monkeypatch.setattr("aegisvault.model.provider._load_built_in_providers", lambda: None)
+    monkeypatch.setattr("aegisvault.model.provider._load_provider_plugins", lambda: None)
     with pytest.raises(ValueError) as exc_info:
         create_provider(connection)
     assert connection.platform_type.value in str(exc_info.value)
@@ -59,18 +57,14 @@ def test_register_provider_rejects_duplicate_by_default() -> None:
 
 def test_register_provider_allows_override() -> None:
     """Override is allowed when explicitly requested."""
-    register_provider(
-        "openai_compatible", OpenAICompatibleProvider, allow_override=True
-    )
+    register_provider("openai_compatible", OpenAICompatibleProvider, allow_override=True)
 
 
 async def test_chat_completion_success(connection: Connection) -> None:
     """chat_completion returns the assistant message content."""
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = HTTPStatus.OK
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": "hello back"}}]
-    }
+    mock_response.json.return_value = {"choices": [{"message": {"content": "hello back"}}]}
     mock_response.raise_for_status.return_value = None
 
     provider = OpenAICompatibleProvider(connection)
@@ -87,9 +81,7 @@ async def test_chat_completion_merges_custom_payload(connection: Connection) -> 
 
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = HTTPStatus.OK
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": ""}}]
-    }
+    mock_response.json.return_value = {"choices": [{"message": {"content": ""}}]}
     mock_response.raise_for_status.return_value = None
 
     provider = OpenAICompatibleProvider(connection)
@@ -149,7 +141,7 @@ def test_build_headers_bearer() -> None:
     """Bearer auth sets Authorization header."""
     conn = Connection(
         name="test",
-        platform_type="openai",
+        platform_type=PlatformType.OPENAI,
         base_url="http://localhost",
         auth_method=AuthMethod.BEARER,
         api_key="secret-token",
@@ -162,7 +154,7 @@ def test_build_headers_api_key() -> None:
     """API key auth passes the key verbatim."""
     conn = Connection(
         name="test",
-        platform_type="openai_compatible",
+        platform_type=PlatformType.OPENAI_COMPATIBLE,
         base_url="http://localhost",
         auth_method=AuthMethod.API_KEY,
         api_key="ApiKey secret-token",
@@ -172,17 +164,32 @@ def test_build_headers_api_key() -> None:
 
 
 def test_build_headers_basic() -> None:
-    """Basic auth sets a Basic authorization header."""
+    """Basic auth is handled by httpx.BasicAuth, not a custom header."""
     conn = Connection(
         name="test",
-        platform_type="openai_compatible",
+        platform_type=PlatformType.OPENAI_COMPATIBLE,
         base_url="http://localhost",
         auth_method=AuthMethod.BASIC,
         username="alice",
         password="wonderland",
     )
     headers = _build_headers(conn)
-    assert headers["Authorization"] == "Basic alice:wonderland"
+    assert "Authorization" not in headers
+
+
+async def test_openai_compatible_provider_uses_basic_auth() -> None:
+    """Basic auth configures httpx.BasicAuth on the HTTP client."""
+    conn = Connection(
+        name="test",
+        platform_type=PlatformType.OPENAI_COMPATIBLE,
+        base_url="http://localhost",
+        auth_method=AuthMethod.BASIC,
+        username="alice",
+        password="wonderland",
+    )
+    provider = OpenAICompatibleProvider(conn)
+    assert isinstance(provider.client.auth, httpx.BasicAuth)
+    await provider.close()
 
 
 def test_build_headers_custom_headers(connection: Connection) -> None:
@@ -193,3 +200,50 @@ def test_build_headers_custom_headers(connection: Connection) -> None:
     headers = _build_headers(connection)
     assert headers["X-Custom"] == "value"
     assert headers["Authorization"] == "Bearer token"
+
+
+# ---------------------------------------------------------------------------
+# Provider registry coverage
+# ---------------------------------------------------------------------------
+
+
+def test_load_built_in_providers_registers_all_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_load_built_in_providers registers every built-in when registry is empty."""
+    monkeypatch.setattr("aegisvault.model.provider._PROVIDER_REGISTRY", {})
+    _load_built_in_providers()
+    from aegisvault.model.provider import _PROVIDER_REGISTRY
+
+    expected = {
+        "openai_compatible",
+        "ollama",
+        "lm_studio",
+        "llamacpp_server",
+        "openai",
+        "custom",
+    }
+    assert expected <= set(_PROVIDER_REGISTRY)
+
+
+def test_load_provider_plugins_skips_when_already_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_load_provider_plugins is a no-op after the first call."""
+    monkeypatch.setattr("aegisvault.model.provider._PLUGINS_LOADED", True)
+    spy = Mock(side_effect=RuntimeError("should not be called"))
+    monkeypatch.setattr("aegisvault.extensions.registry.load_provider_plugins", spy)
+    _load_provider_plugins()
+    spy.assert_not_called()
+
+
+def test_load_provider_plugins_swallows_plugin_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_load_provider_plugins tolerates failures from third-party plugins."""
+    monkeypatch.setattr("aegisvault.model.provider._PLUGINS_LOADED", False)
+    monkeypatch.setattr(
+        "aegisvault.extensions.registry.load_provider_plugins",
+        Mock(side_effect=RuntimeError("plugin boom")),
+    )
+    _load_provider_plugins()

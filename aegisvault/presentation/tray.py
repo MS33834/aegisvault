@@ -40,11 +40,23 @@ _STATE_SHORT_LABELS: dict[str, str] = {
     TaskState.QUARANTINED.name: "已隔离",
 }
 
+_STATE_DETAILS: dict[str, str] = {
+    TaskState.IDLE.name: "任务等待处理",
+    TaskState.CLASSIFYING.name: "正在识别内容类别",
+    TaskState.ENCRYPTING.name: "正在加密并写入保险库",
+    TaskState.INDEXING.name: "正在建立索引",
+    TaskState.COMPLETED.name: "已完成加密归档",
+    TaskState.FAILED.name: "处理失败，需要关注",
+    TaskState.QUARANTINED.name: "已隔离，等待人工复核",
+}
+
 _STATUS_ICONS = {
     "secure": "🔐",
     "warning": "⚠️",
     "offline": "🔌",
     "online": "🌐",
+    "busy": "⚙️",
+    "idle": "💤",
 }
 
 
@@ -57,11 +69,7 @@ class TrayApplication:
         config: AegisConfig | None = None,
     ) -> None:
         existing = QApplication.instance()
-        self.app = (
-            existing
-            if isinstance(existing, QApplication)
-            else QApplication([])
-        )
+        self.app = existing if isinstance(existing, QApplication) else QApplication([])
         self.tray = QSystemTrayIcon()
         self.menu = QMenu()
         self.config = config
@@ -91,6 +99,15 @@ class TrayApplication:
 
     def run(self) -> None:
         """Start the tray application."""
+        self._build_menu()
+        self._refresh_header()
+        self.tray.setContextMenu(self.menu)
+        self.tray.setVisible(True)
+        self.tray.setToolTip("AegisVault")
+        self.app.exec()
+
+    def _build_menu(self) -> None:
+        """Construct the context menu structure."""
         self.menu.aboutToShow.connect(self._refresh_header)
         self.menu.addAction(self._header_action)
         self.menu.addSeparator()
@@ -105,8 +122,9 @@ class TrayApplication:
         self.menu.addMenu(self.tasks_menu)
 
         self.menu.addSeparator()
-        self.menu.addSection("Help")
-        about_action = QAction(f"ℹ️ About AegisVault v{__version__}", self.menu)
+        self.menu.addSection("ℹ️ Help")
+
+        about_action = QAction(f"About AegisVault v{__version__}", self.menu)
         about_action.triggered.connect(self._show_about)
         self.menu.addAction(about_action)
 
@@ -119,15 +137,9 @@ class TrayApplication:
         quit_action.triggered.connect(self.app.quit)
         self.menu.addAction(quit_action)
 
-        self._refresh_header()
-        self.tray.setContextMenu(self.menu)
-        self.tray.setVisible(True)
-        self.tray.setToolTip("AegisVault")
-        self.app.exec()
-
     def _add_quick_actions(self, menu: QMenu) -> None:
         """Add static quick-entry actions with icons and grouping."""
-        menu.addSection("Quick Actions")
+        menu.addSection("⚡ Quick Actions")
 
         open_inbox = QAction("📥 Open Inbox", menu)
         open_inbox.triggered.connect(self._open_inbox)
@@ -146,9 +158,34 @@ class TrayApplication:
         menu.addAction(dashboard)
 
         menu.addSeparator()
+        menu.addSection("🔔 Activity")
         notifications = QAction("🔔 Notifications (0)", menu)
         notifications.setEnabled(False)
         menu.addAction(notifications)
+
+        status_summary = QAction(self._activity_summary_text(), menu)
+        status_summary.setEnabled(False)
+        menu.addAction(status_summary)
+
+    def _activity_summary_text(self) -> str:
+        """Return a short activity summary string for the quick actions panel."""
+        if self.task_store is None:
+            return "📦 Tasks not configured"
+        counts = self.task_store.counts_by_state()
+        total = sum(counts.values())
+        completed = counts.get(TaskState.COMPLETED.name, 0)
+        failed = counts.get(TaskState.FAILED.name, 0)
+        quarantined = counts.get(TaskState.QUARANTINED.name, 0)
+        active = total - completed - failed - quarantined
+        parts = [f"📋 总计 {total}"]
+        if active:
+            parts.append(f"⚙️ 进行中 {active}")
+        parts.append(f"✅ 完成 {completed}")
+        if failed:
+            parts.append(f"❌ 失败 {failed}")
+        if quarantined:
+            parts.append(f"⚠️ 隔离 {quarantined}")
+        return " · ".join(parts)
 
     def _open_inbox(self) -> None:
         """Open the configured inbox directory."""
@@ -170,9 +207,7 @@ class TrayApplication:
 
     def _show_about(self) -> None:
         """Placeholder for about dialog."""
-        print(
-            f"AegisVault v{__version__} - Local private content management agent"
-        )  # noqa: T201
+        print(f"AegisVault v{__version__} - Local private content management agent")  # noqa: T201
 
     def _open_docs(self) -> None:
         """Placeholder for documentation link."""
@@ -224,9 +259,7 @@ class TrayApplication:
         vault = self.config.paths.vault if self.config else Path.home() / "AegisVault" / "Vault"
         if not vault.exists():
             return "0 B"
-        total_bytes = sum(
-            f.stat().st_size for f in vault.rglob("*") if f.is_file()
-        )
+        total_bytes = sum(f.stat().st_size for f in vault.rglob("*") if f.is_file())
         size = float(total_bytes)
         for unit in ("B", "KB", "MB", "GB"):
             if size < 1024:
@@ -242,7 +275,7 @@ class TrayApplication:
     def _refresh_connections_menu(self) -> None:
         """Refresh the connections submenu with status icons and grouping."""
         self.connections_menu.clear()
-        self.connections_menu.addSection("Enabled Connections")
+        self.connections_menu.addSection("🔌 Enabled Connections")
         enabled = self.connection_manager.list_enabled()
 
         if not enabled:
@@ -276,7 +309,7 @@ class TrayApplication:
     def _refresh_tasks_menu(self) -> None:
         """Refresh the tasks submenu from the task store."""
         self.tasks_menu.clear()
-        self.tasks_menu.addSection("Task Activity")
+        self.tasks_menu.addSection("📈 Task Activity")
 
         if self.task_store is None:
             not_configured = QAction("Tasks not configured", self.tasks_menu)
@@ -358,6 +391,7 @@ class TrayApplication:
         short_id = str(task.task_id)[:8]
         icon = _STATE_ICONS.get(state, "•")
         short_state = _STATE_SHORT_LABELS.get(state, state)
+        detail = _STATE_DETAILS.get(state, "")
         message = task.message or ""
         label = f"{icon} {short_id} · {short_state}"
         if message:
@@ -365,11 +399,12 @@ class TrayApplication:
             label = f"{label} · {snippet}"
         action = QAction(label, parent)
         action.setEnabled(False)
+        action.setToolTip(detail)
         return action
 
     def _refresh_action(self) -> QAction:
         """Return a Refresh action wired to the tasks menu refresh handler."""
-        refresh_action = QAction("Refresh", self.tasks_menu)
+        refresh_action = QAction("🔄 Refresh", self.tasks_menu)
         refresh_action.triggered.connect(self._refresh_tasks_menu)
         return refresh_action
 

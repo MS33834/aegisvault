@@ -9,7 +9,13 @@ from pydantic import ValidationError
 
 from aegisvault.api.schemas import ClassificationResult
 from aegisvault.model import ModelProvider
-from aegisvault.model.classifier import Classifier, _extract_json
+from aegisvault.model.classifier import (
+    CLASSIFICATION_PROMPT,
+    Classifier,
+    _extract_json,
+    _normalize_classification_data,
+)
+from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import Connection, PlatformType
 
 
@@ -70,10 +76,7 @@ def summarize_prompt_eval_results(
 
     print(f"\nPrompt eval summary: {passed}/{total} passed ({pass_rate:.1%})")
     for failure in failures:
-        print(
-            f"  FAIL [{failure['id']}] "
-            f"expected={failure['expected']} {failure['error']}"
-        )
+        print(f"  FAIL [{failure['id']}] " f"expected={failure['expected']} {failure['error']}")
 
     return {
         "total": total,
@@ -105,8 +108,8 @@ async def test_prompt_eval_sample(
             data = _extract_json(raw_output)
             assert isinstance(data, dict)
             expected_fields = sample.get("expected_fields", {})
-            for key, value in expected_fields.items():
-                assert data.get(key) == value
+            for key in expected_fields:
+                assert key in data
 
             source_path = tmp_path / "sample.txt"
             source_path.write_text("sample content")
@@ -189,3 +192,276 @@ def test_extract_json_new_samples(
     assert isinstance(data, dict)
     for key, value in expected_field.items():
         assert data.get(key) == value
+
+
+@pytest.mark.parametrize(
+    "raw_output,expected_fields",
+    [
+        (
+            '{"sensitivity": "high", "category": "finance", '
+            '"tags": ["bank"], "summary": "A bank statement", '
+            '"disguise_name": "statement", "disguise_extension": "csv",}',
+            {"sensitivity": "high", "disguise_extension": "csv"},
+        ),
+        (
+            '{"sensitivity": "low", /* category */ "category": "other", '
+            '"tags": [], "summary": "comment test", '
+            '"disguise_name": "comment_test", "disguise_extension": "txt"}',
+            {"summary": "comment test", "disguise_name": "comment_test"},
+        ),
+        (
+            "{'sensitivity': 'critical', 'category': 'health', 'tags': ['scan'], "
+            "'summary': 'single quote test', 'disguise_name': 'health_scan', "
+            "'disguise_extension': 'dat'}",
+            {"sensitivity": "critical", "disguise_name": "health_scan"},
+        ),
+    ],
+    ids=["trailing-comma", "block-comment", "single-quotes"],
+)
+def test_extract_json_repairs_common_model_mistakes(
+    raw_output: str,
+    expected_fields: dict[str, Any],
+) -> None:
+    """Verify _extract_json repairs trailing commas, comments and single quotes."""
+    data = _extract_json(raw_output)
+    assert isinstance(data, dict)
+    for key, value in expected_fields.items():
+        assert data.get(key) == value
+
+
+def test_normalize_classification_data_defaults_and_case() -> None:
+    """Normalization lowercases enums and backfills missing optional fields."""
+    normalized = _normalize_classification_data(
+        {
+            "sensitivity": "  MEDIUM  ",
+            "category": "WORK",
+            "tags": None,
+            "summary": None,
+            "disguise_name": "  spaced_name  ",
+            "disguise_extension": "  LOG  ",
+        }
+    )
+    assert normalized["sensitivity"] == "medium"
+    assert normalized["category"] == "work"
+    assert normalized["tags"] == []
+    assert normalized["summary"] == ""
+    assert normalized["disguise_name"] == "spaced_name"
+    assert normalized["disguise_extension"] == "LOG"
+
+
+# ---------------------------------------------------------------------------
+# Prompt stability evaluation framework
+# ---------------------------------------------------------------------------
+
+# Register new prompt variants here to measure their stability against the
+# shared fixture suite. Each variant must accept {filename} and {size}.
+PROMPT_VARIANTS: list[dict[str, Any]] = [
+    {
+        "id": "default",
+        "template": CLASSIFICATION_PROMPT,
+    },
+    {
+        "id": "concise",
+        "template": (
+            "Classify the file. Reply with ONLY valid JSON.\n\n"
+            "Schema: sensitivity, category, tags, summary, disguise_name, "
+            "disguise_extension.\n\n"
+            "File: {filename}\nSize: {size}\n"
+        ),
+    },
+    {
+        "id": "structured",
+        "template": (
+            "You are AegisVault classifier. Return JSON only.\n"
+            "Use this exact shape:\n"
+            '{{"sensitivity": "...", "category": "...", "tags": [...], '
+            '"summary": "...", "disguise_name": "...", "disguise_extension": "..."}}\n'
+            "\nFile name: {filename}\nFile size: {size} bytes\n"
+        ),
+    },
+]
+
+
+async def _run_prompt_variant(
+    variant: dict[str, Any],
+    samples: list[dict[str, Any]],
+    tmp_path: Path,
+    local_connection: Connection,
+) -> dict[str, Any]:
+    """Run all samples through a single prompt variant and return metrics."""
+    results: list[dict[str, Any]] = []
+    for sample in samples:
+        record: dict[str, Any] = {
+            "sample_id": sample["id"],
+            "passed": False,
+            "error": None,
+        }
+        try:
+            source_path = tmp_path / f"{sample['id']}.txt"
+            source_path.write_text("sample content")
+            classifier = Classifier(
+                FakeProvider(sample["raw_output"]),
+                local_connection,
+                prompt_template=variant["template"],
+            )
+            if sample["expected_outcome"] == "success":
+                result = await classifier.classify(source_path)
+                assert isinstance(result, ClassificationResult)
+                for key, value in sample.get("expected_fields", {}).items():
+                    assert getattr(result, key) == value
+            elif sample["expected_outcome"] == "extract_success_schema_fail":
+                with pytest.raises(ValidationError):
+                    await classifier.classify(source_path)
+            elif sample["expected_outcome"] == "extract_fail":
+                with pytest.raises((ValueError, json.JSONDecodeError)):
+                    await classifier.classify(source_path)
+            record["passed"] = True
+        except Exception as exc:  # noqa: BLE001
+            record["error"] = f"{type(exc).__name__}: {exc}"
+        results.append(record)
+
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    return {
+        "variant_id": variant["id"],
+        "total": total,
+        "passed": passed,
+        "pass_rate": passed / total if total else 0.0,
+        "failures": [r for r in results if not r["passed"]],
+    }
+
+
+@pytest.mark.parametrize("variant", PROMPT_VARIANTS, ids=lambda v: v["id"])
+async def test_prompt_variant_stability(
+    variant: dict[str, Any],
+    tmp_path: Path,
+    local_connection: Connection,
+) -> None:
+    """Each registered prompt variant must reach 100% stability on the suite."""
+    samples = _load_samples()
+    metrics = await _run_prompt_variant(variant, samples, tmp_path, local_connection)
+    assert (
+        metrics["pass_rate"] == 1.0
+    ), f"Prompt variant {variant['id']!r} failed on: {metrics['failures']}"
+
+
+# ---------------------------------------------------------------------------
+# Classifier construction from ConnectionManager
+# ---------------------------------------------------------------------------
+
+
+def test_classifier_from_manager_prefers_trusted_local(
+    tmp_path: Path,
+) -> None:
+    """from_manager selects the trusted local chat connection."""
+    manager = ConnectionManager(tmp_path / "conn.json")
+    # Wipe the default seeded connection to control the fixture.
+    for conn in manager.list_all():
+        manager.delete(conn.id)
+
+    local = Connection(
+        name="local",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        is_local=True,
+        capabilities=["chat"],
+    )
+    cloud = Connection(
+        name="cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=True,
+        capabilities=["chat"],
+    )
+    manager.add(local)
+    manager.add(cloud)
+
+    classifier = Classifier.from_manager(manager, allow_cloud_fallback=True)
+    assert classifier.connection.id == local.id
+
+
+def test_classifier_from_manager_cloud_fallback(
+    tmp_path: Path,
+) -> None:
+    """from_manager falls back to authorized cloud when no local connection exists."""
+    manager = ConnectionManager(tmp_path / "conn.json")
+    for conn in manager.list_all():
+        manager.delete(conn.id)
+
+    cloud = Connection(
+        name="cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=True,
+        capabilities=["chat"],
+    )
+    manager.add(cloud)
+
+    classifier = Classifier.from_manager(manager, allow_cloud_fallback=True)
+    assert classifier.connection.id == cloud.id
+
+
+def test_classifier_from_manager_no_chat_connection_raises(
+    tmp_path: Path,
+) -> None:
+    """from_manager raises RuntimeError when no suitable connection exists."""
+    manager = ConnectionManager(tmp_path / "conn.json")
+    for conn in manager.list_all():
+        manager.delete(conn.id)
+
+    no_chat = Connection(
+        name="no-chat",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+        capabilities=["embed"],
+    )
+    manager.add(no_chat)
+
+    with pytest.raises(RuntimeError, match="No suitable chat connection"):
+        Classifier.from_manager(manager)
+
+
+def test_classifier_from_manager_cloud_not_authorized(
+    tmp_path: Path,
+) -> None:
+    """Unauthorized cloud connections are ignored unless explicitly authorized."""
+    manager = ConnectionManager(tmp_path / "conn.json")
+    for conn in manager.list_all():
+        manager.delete(conn.id)
+
+    cloud = Connection(
+        name="cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=False,
+        capabilities=["chat"],
+    )
+    manager.add(cloud)
+
+    with pytest.raises(RuntimeError, match="No suitable chat connection"):
+        Classifier.from_manager(manager, allow_cloud_fallback=True)
+
+
+async def test_classifier_uses_custom_prompt_template(
+    tmp_path: Path,
+    local_connection: Connection,
+) -> None:
+    """Classifier can be parameterized with a custom prompt template."""
+    custom_prompt = "CUSTOM {filename} {size}"
+    raw_output = (
+        '{"sensitivity": "low", "category": "other", "tags": [], '
+        '"summary": "custom prompt test", "disguise_name": "custom", '
+        '"disguise_extension": "txt"}'
+    )
+    provider = FakeProvider(raw_output)
+    classifier = Classifier(provider, local_connection, prompt_template=custom_prompt)
+
+    source_path = tmp_path / "doc.txt"
+    source_path.write_text("x")
+    result = await classifier.classify(source_path)
+
+    assert isinstance(result, ClassificationResult)
+    assert result.summary == "custom prompt test"

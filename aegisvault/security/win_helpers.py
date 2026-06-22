@@ -5,6 +5,7 @@ These helpers rely on Windows-only APIs. They will raise RuntimeError on non-Win
 
 import ctypes
 import sys
+from typing import ClassVar
 
 
 def _require_windows() -> None:
@@ -18,7 +19,10 @@ def secure_zero(buf: bytearray) -> None:
     _require_windows()
     if not buf:
         return
-    ctypes.windll.kernel32.RtlSecureZeroMemory(ctypes.c_char_p(bytes(buf)), len(buf))  # type: ignore[attr-defined]
+    # Create a ctypes array that shares the underlying buffer so the Windows
+    # API zeros the original bytearray, not a temporary copy.
+    arr = (ctypes.c_char * len(buf)).from_buffer(buf)
+    ctypes.windll.kernel32.RtlSecureZeroMemory(arr, len(buf))  # type: ignore[attr-defined]
     for i in range(len(buf)):
         buf[i] = 0
 
@@ -29,7 +33,7 @@ def protect_data(data: bytes) -> bytes:
     import ctypes.wintypes as wintypes
 
     class DATA_BLOB(ctypes.Structure):  # noqa: N801
-        _fields_ = [
+        _fields_: ClassVar[list[tuple[str, type]]] = [
             ("cbData", wintypes.DWORD),
             ("pbData", ctypes.POINTER(wintypes.BYTE)),
         ]
@@ -70,7 +74,7 @@ def unprotect_data(data: bytes) -> bytes:
     import ctypes.wintypes as wintypes
 
     class DATA_BLOB(ctypes.Structure):  # noqa: N801
-        _fields_ = [
+        _fields_: ClassVar[list[tuple[str, type]]] = [
             ("cbData", wintypes.DWORD),
             ("pbData", ctypes.POINTER(wintypes.BYTE)),
         ]

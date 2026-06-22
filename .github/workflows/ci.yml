@@ -26,10 +26,13 @@ jobs:
           cache: poetry
 
       - name: Install dependencies
-        run: poetry install --with dev
+        run: poetry install --with dev --no-interaction
 
       - name: Lint
         run: poetry run ruff check .
+
+      - name: Format check
+        run: poetry run ruff format --check .
 
       - name: Type check
         run: poetry run mypy aegisvault
@@ -65,7 +68,7 @@ jobs:
           cache: poetry
 
       - name: Install dependencies
-        run: poetry install --with dev
+        run: poetry install --with dev --no-interaction
 
       - name: Test
         run: poetry run pytest tests/ -q -m "not integration and not gui and not slow"

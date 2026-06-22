@@ -1,5 +1,6 @@
 """OpenAI-compatible model provider abstraction."""
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, cast
@@ -7,6 +8,8 @@ from typing import Any, cast
 import httpx
 
 from aegisvault.platform.models import AuthMethod, Connection
+
+logger = logging.getLogger(__name__)
 
 
 def _build_headers(connection: Connection) -> dict[str, str]:
@@ -18,9 +21,6 @@ def _build_headers(connection: Connection) -> dict[str, str]:
         headers["Authorization"] = f"Bearer {connection.api_key}"
     elif connection.auth_method == AuthMethod.API_KEY and connection.api_key:
         headers["Authorization"] = connection.api_key
-    elif connection.auth_method == AuthMethod.BASIC and connection.username:
-        # httpx.BasicAuth is preferred; placeholder for custom header usage.
-        headers["Authorization"] = f"Basic {connection.username}:{connection.password}"
 
     return headers
 
@@ -51,11 +51,15 @@ class OpenAICompatibleProvider(ModelProvider):
     ) -> None:
         self.connection = connection
         self.temperature = temperature
-        auth = httpx.BasicAuth(connection.username, connection.password) if (
-            connection.auth_method == AuthMethod.BASIC
-            and connection.username
-            and connection.password
-        ) else None
+        auth = (
+            httpx.BasicAuth(connection.username, connection.password)
+            if (
+                connection.auth_method == AuthMethod.BASIC
+                and connection.username
+                and connection.password
+            )
+            else None
+        )
         self.client = httpx.AsyncClient(
             base_url=connection.base_url,
             timeout=connection.timeout,
@@ -94,6 +98,17 @@ _PROVIDER_REGISTRY: dict[str, Callable[[Connection], ModelProvider]] = {}
 _PLUGINS_LOADED: bool = False
 
 
+BUILT_IN_PROVIDER_NAMES: tuple[str, ...] = (
+    "openai_compatible",
+    "ollama",
+    "lm_studio",
+    "llamacpp_server",
+    "openai",
+    "anthropic",
+    "custom",
+)
+
+
 def register_provider(
     name: str,
     factory: Callable[[Connection], ModelProvider],
@@ -118,13 +133,8 @@ def _load_built_in_providers() -> None:
     """Register built-in providers lazily."""
     if "openai_compatible" in _PROVIDER_REGISTRY:
         return
-    register_provider("openai_compatible", OpenAICompatibleProvider)
-    register_provider("ollama", OpenAICompatibleProvider)
-    register_provider("lm_studio", OpenAICompatibleProvider)
-    register_provider("llamacpp_server", OpenAICompatibleProvider)
-    register_provider("openai", OpenAICompatibleProvider)
-    register_provider("anthropic", OpenAICompatibleProvider)
-    register_provider("custom", OpenAICompatibleProvider)
+    for name in BUILT_IN_PROVIDER_NAMES:
+        register_provider(name, OpenAICompatibleProvider)
 
 
 def _load_provider_plugins() -> None:
@@ -138,7 +148,7 @@ def _load_provider_plugins() -> None:
 
         load_provider_plugins()
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("Failed to load provider plugins", exc_info=True)
 
 
 def create_provider(connection: Connection) -> ModelProvider:

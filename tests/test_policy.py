@@ -94,3 +94,25 @@ def test_decorator_rejects_cloud_keyword_connection() -> None:
     )
     with pytest.raises(SecurityPolicyError):
         _sensitive_work(connection=cloud)
+
+
+def test_decorator_rejects_mixed_local_and_cloud() -> None:
+    """Decorator rejects when any Connection argument is not trusted local."""
+
+    @sensitive_operation
+    def _sensitive_work(local: Connection, remote: Connection) -> str:
+        return "done"
+
+    local = Connection(
+        name="Local",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+    )
+    cloud = Connection(
+        name="Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+    )
+    with pytest.raises(SecurityPolicyError):
+        _sensitive_work(local, cloud)

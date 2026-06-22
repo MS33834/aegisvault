@@ -34,16 +34,21 @@ def _powershell() -> str:
     raise RuntimeError("PowerShell not found")
 
 
+def _quote_ps_string(value: str) -> str:
+    """Single-quote *value* for PowerShell, escaping embedded single quotes."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def build_block_rule_command(process_path: Path) -> str:
     """Build the New-NetFirewallRule command as a string."""
     path = str(process_path.resolve())
     return (
         f"New-NetFirewallRule "
-        f"-Name '{RULE_NAME}' "
-        f"-DisplayName '{RULE_DISPLAY_NAME}' "
-        f"-Description '{RULE_DESCRIPTION}' "
+        f"-Name {_quote_ps_string(RULE_NAME)} "
+        f"-DisplayName {_quote_ps_string(RULE_DISPLAY_NAME)} "
+        f"-Description {_quote_ps_string(RULE_DESCRIPTION)} "
         f"-Direction Outbound "
-        f"-Program '{path}' "
+        f"-Program {_quote_ps_string(path)} "
         f"-Action Block "
         f"-Profile Any"
     )
