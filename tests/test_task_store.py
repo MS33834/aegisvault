@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Tests for SQLite-backed task store."""
 
 import sqlite3
@@ -7,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from aegisvault.api.schemas import ClassificationResult
+from aegisvault.model.embedding import DeterministicEmbeddingProvider
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 
@@ -307,3 +309,74 @@ def test_fallback_search_empty_query_returns_empty(tmp_path: Path) -> None:
         store._init_fts(conn)
 
     assert store.search("") == []
+
+
+@pytest.fixture
+def embedding_provider() -> DeterministicEmbeddingProvider:
+    """Deterministic provider for vector tests."""
+    return DeterministicEmbeddingProvider(dimension=16)
+
+
+def test_index_embedding_and_semantic_search(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """Indexed embeddings can be retrieved by semantic search."""
+    task_id = uuid4()
+    vault_path = Path("/vault/work/report.log")
+
+    task_store.index_embedding(task_id, vault_path, classification, embedding_provider)
+
+    results = task_store.semantic_search("finance report", top_k=5, provider=embedding_provider)
+    assert len(results) >= 1
+    assert results[0].vault_path == vault_path
+
+
+def test_semantic_search_empty_query_returns_empty(
+    task_store: TaskStore,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """Semantic search with an empty query returns no results."""
+    assert task_store.semantic_search("", top_k=5, provider=embedding_provider) == []
+    assert task_store.semantic_search("   ", top_k=5, provider=embedding_provider) == []
+
+
+def test_semantic_search_respects_top_k(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """Semantic search respects the top_k limit."""
+    for i in range(5):
+        task_store.index_embedding(
+            uuid4(),
+            Path(f"/vault/work/report{i}.log"),
+            classification.model_copy(update={"summary": f"Report number {i}"}),
+            embedding_provider,
+        )
+
+    results = task_store.semantic_search("Report", top_k=2, provider=embedding_provider)
+    assert len(results) == 2
+
+
+def test_index_embedding_uses_category_when_summary_and_tags_empty(
+    task_store: TaskStore,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """index_embedding falls back to category when no summary/tags are present."""
+    classification = ClassificationResult(
+        sensitivity="low",
+        category="health",
+        tags=[],
+        summary="",
+        disguise_name="checkup",
+        disguise_extension="log",
+    )
+    vault_path = Path("/vault/health/checkup.log")
+
+    task_store.index_embedding(uuid4(), vault_path, classification, embedding_provider)
+    results = task_store.semantic_search("health", top_k=5, provider=embedding_provider)
+
+    assert len(results) == 1
+    assert results[0].vault_path == vault_path

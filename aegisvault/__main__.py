@@ -10,8 +10,16 @@ from typing import Any
 
 from aegisvault.config import AegisConfig
 from aegisvault.orchestration.agent import AegisAgent
+from aegisvault.security import windows_hello
+from aegisvault.security.audit_log import AuditLogger
+from aegisvault.security.master_key import MasterKeyProvider, create_master_key_provider
 
 logger = logging.getLogger(__name__)
+
+
+def _master_key_storage_path(config: AegisConfig) -> Path:
+    """Return the filesystem location used to persist the protected master key."""
+    return config.paths.connections.parent / "master_key.bin"
 
 
 def _configure_logging(debug: bool) -> None:
@@ -64,7 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def build_config(args: argparse.Namespace) -> AegisConfig:
     """Build an AegisConfig from CLI arguments."""
-    config = AegisConfig()
+    config = AegisConfig.load_from_file()
     config.debug = args.debug
     if args.inbox:
         config.paths.inbox = args.inbox
@@ -139,7 +147,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _configure_logging(args.debug)
     config = build_config(args)
-    agent = AegisAgent(config)
+    audit_logger = AuditLogger(config)
+
+    master_key_provider: MasterKeyProvider | None = None
+    if config.security.windows_hello_enabled:
+        storage_path = _master_key_storage_path(config)
+        hello_salt = windows_hello.get_key_derivation_salt(storage_path)
+        master_key_provider = create_master_key_provider(
+            config.security.master_key_provider,
+            storage_path,
+            password=config.security.master_key_password,
+            hello_salt=hello_salt,
+        )
+
+    agent = AegisAgent(config, audit_logger=audit_logger, master_key_provider=master_key_provider)
 
     logger.info("AegisVault is starting...")
 

@@ -76,7 +76,7 @@ def summarize_prompt_eval_results(
 
     print(f"\nPrompt eval summary: {passed}/{total} passed ({pass_rate:.1%})")
     for failure in failures:
-        print(f"  FAIL [{failure['id']}] " f"expected={failure['expected']} {failure['error']}")
+        print(f"  FAIL [{failure['id']}] expected={failure['expected']} {failure['error']}")
 
     return {
         "total": total,

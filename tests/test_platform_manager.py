@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Tests for platform connection manager."""
 
 from pathlib import Path

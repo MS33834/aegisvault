@@ -59,8 +59,13 @@ class FakeMenu:
         self.actions.append(action)
         return action
 
-    def addAction(self, action: FakeAction | None) -> None:
+    def addAction(self, action: FakeAction | str | None) -> FakeAction | None:
+        if isinstance(action, str):
+            fa = FakeAction(action, self)
+            self.actions.append(fa)
+            return fa
         self.actions.append(action)
+        return None
 
     def addSeparator(self) -> None:
         self.actions.append(None)
@@ -98,14 +103,25 @@ class FakeProgressBar:
         self.text_visible = visible
 
 
+class _CallableStr(str):
+    """String that can also be called like QLabel.text()."""
+
+    def __call__(self) -> _CallableStr:
+        return self
+
+
 class FakeLabel:
     """Stub QLabel for headless tests."""
 
     def __init__(self, text: str = "") -> None:
-        self.text = text
+        self._text = _CallableStr(text)
+
+    @property
+    def text(self) -> _CallableStr:
+        return self._text
 
     def setText(self, text: str) -> None:
-        self.text = text
+        self._text = _CallableStr(text)
 
     def setAlignment(self, _alignment: object) -> None:
         pass
@@ -163,7 +179,8 @@ class FakeDialog:
         Accepted = 1
         Rejected = 0
 
-    def __init__(self) -> None:
+    def __init__(self, parent: object | None = None) -> None:
+        self._parent = parent
         self._title = ""
         self._minimum_width = 0
         self._minimum_size: tuple[int, int] = (0, 0)
@@ -234,8 +251,8 @@ class FakeLineEdit:
         Password = 2
         Normal = 0
 
-    def __init__(self) -> None:
-        self._text = ""
+    def __init__(self, text: str = "") -> None:
+        self._text = text
         self._placeholder = ""
         self._echo_mode = self.EchoMode.Normal
         self._style_sheet = ""
@@ -291,6 +308,7 @@ class FakeCheckBox:
         self._text = text
         self._checked = False
         self._tooltip = ""
+        self._visible = True
 
     def setText(self, text: str) -> None:
         self._text = text
@@ -303,6 +321,12 @@ class FakeCheckBox:
 
     def isChecked(self) -> bool:
         return self._checked
+
+    def setVisible(self, visible: bool) -> None:
+        self._visible = visible
+
+    def isVisible(self) -> bool:
+        return self._visible
 
 
 class FakePushButton:
@@ -343,7 +367,19 @@ class FakeTableWidget:
         self._edit_triggers = 0
         self._selected: list[FakeTableWidgetItem] = []
         self._header = FakeHeaderView()
+        self._context_menu_policy = 0
         self.cellDoubleClicked = FakeSignal()
+        self.itemSelectionChanged = FakeSignal()
+        self.customContextMenuRequested = FakeSignal()
+
+    def viewport(self) -> FakeTableWidget:
+        return self
+
+    def mapToGlobal(self, _position: object) -> object:
+        return None
+
+    def setContextMenuPolicy(self, policy: int) -> None:
+        self._context_menu_policy = policy
 
     def setColumnCount(self, count: int) -> None:
         self._column_count = count
@@ -382,6 +418,11 @@ class FakeTableWidget:
         """Emit the cellDoubleClicked signal to connected handlers."""
         for callback in self.cellDoubleClicked.connected:
             callback(row, column)
+
+    def emit_item_selection_changed(self) -> None:
+        """Emit the itemSelectionChanged signal to connected handlers."""
+        for callback in self.itemSelectionChanged.connected:
+            callback()
 
 
 class FakeHeaderView:
@@ -424,18 +465,113 @@ class FakeVBoxLayout:
         self._widgets: list[object] = []
         self._layouts: list[object] = []
 
-    def addWidget(self, widget: object) -> None:
+    def addWidget(self, widget: object, *_args: object, **_kwargs: object) -> None:
         self._widgets.append(widget)
 
     def addLayout(self, layout: object) -> None:
         self._layouts.append(layout)
 
+    def addStretch(self) -> None:
+        pass
+
 
 class FakeHBoxLayout(FakeVBoxLayout):
     """Stub QHBoxLayout for headless tests."""
 
-    def addStretch(self) -> None:
+
+class FakeGroupBox:
+    """Stub QGroupBox for headless tests."""
+
+    def __init__(self, title: str = "") -> None:
+        self.title = title
+        self._layout: object | None = None
+
+    def setLayout(self, layout: object) -> None:
+        self._layout = layout
+
+
+class FakeFileDialog:
+    """Stub QFileDialog for headless tests."""
+
+    next_directory: str = ""
+
+    @classmethod
+    def getExistingDirectory(
+        cls, _parent: object | None = None, _caption: str = "", _directory: str = ""
+    ) -> str:
+        return cls.next_directory
+
+
+class FakeTreeWidgetItem:
+    """Stub QTreeWidgetItem for headless tests."""
+
+    def __init__(self, _parent: object | None = None, texts: list[str] | None = None) -> None:
+        self._texts = list(texts or [""])
+
+    def text(self, column: int) -> str:
+        if column < 0 or column >= len(self._texts):
+            return ""
+        return self._texts[column]
+
+
+class FakeTreeWidget:
+    """Stub QTreeWidget for headless tests."""
+
+    def __init__(self) -> None:
+        self._header = ""
+        self._items: list[FakeTreeWidgetItem] = []
+        self._current_item: FakeTreeWidgetItem | None = None
+        self.currentItemChanged = FakeSignal()
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def setHeaderLabel(self, label: str) -> None:
+        self._header = label
+
+    def addTopLevelItem(self, item: FakeTreeWidgetItem) -> None:
+        self._items.append(item)
+
+    def setCurrentItem(self, item: FakeTreeWidgetItem | None) -> None:
+        self._current_item = item
+
+    def currentItem(self) -> FakeTreeWidgetItem | None:
+        return self._current_item
+
+    def emit_current_item_changed(self, current: FakeTreeWidgetItem | None) -> None:
+        """Emit the currentItemChanged signal to connected handlers."""
+        for callback in self.currentItemChanged.connected:
+            callback(current, self._current_item)
+
+
+class FakeSplitter:
+    """Stub QSplitter for headless tests."""
+
+    def __init__(self, _orientation: object) -> None:
+        self._widgets: list[object] = []
+
+    def addWidget(self, widget: object) -> None:
+        self._widgets.append(widget)
+
+    def setStretchFactor(self, _index: int, _stretch: int) -> None:
         pass
+
+
+class FakeTextEdit:
+    """Stub QTextEdit for headless tests."""
+
+    def __init__(self) -> None:
+        self._text = ""
+        self._read_only = False
+
+    def setPlainText(self, text: str) -> None:
+        self._text = text
+
+    def setReadOnly(self, read_only: bool) -> None:
+        self._read_only = read_only
+
+    def toPlainText(self) -> str:
+        return self._text
 
 
 class FakeQt:
@@ -443,6 +579,13 @@ class FakeQt:
 
     class AlignmentFlag:
         AlignLeft = 1
+
+    class Orientation:
+        Horizontal = 1
+        Vertical = 2
+
+    class ContextMenuPolicy:
+        CustomContextMenu = 3
 
 
 def install_presentation_stubs() -> dict[str, Any]:
@@ -471,7 +614,9 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_widgets.QComboBox = FakeComboBox
     fake_qt_widgets.QDialog = FakeDialog
     fake_qt_widgets.QDialogButtonBox = FakeDialogButtonBox
+    fake_qt_widgets.QFileDialog = FakeFileDialog
     fake_qt_widgets.QFormLayout = FakeFormLayout
+    fake_qt_widgets.QGroupBox = FakeGroupBox
     fake_qt_widgets.QHBoxLayout = FakeHBoxLayout
     fake_qt_widgets.QHeaderView = FakeHeaderView
     fake_qt_widgets.QLabel = FakeLabel
@@ -480,9 +625,13 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_widgets.QMessageBox = FakeMessageBox
     fake_qt_widgets.QProgressBar = FakeProgressBar
     fake_qt_widgets.QPushButton = FakePushButton
+    fake_qt_widgets.QSplitter = FakeSplitter
     fake_qt_widgets.QSystemTrayIcon = FakeSystemTrayIcon
     fake_qt_widgets.QTableWidget = FakeTableWidget
     fake_qt_widgets.QTableWidgetItem = FakeTableWidgetItem
+    fake_qt_widgets.QTextEdit = FakeTextEdit
+    fake_qt_widgets.QTreeWidget = FakeTreeWidget
+    fake_qt_widgets.QTreeWidgetItem = FakeTreeWidgetItem
     fake_qt_widgets.QVBoxLayout = FakeVBoxLayout
     fake_qt_widgets.QWidget = object
     fake_qt_widgets.QWidgetAction = FakeWidgetAction
@@ -506,9 +655,13 @@ def restore_modules(saved_modules: dict[str, Any]) -> None:
             sys.modules[name] = module
     sys.modules.pop("aegisvault.presentation.tray", None)
     sys.modules.pop("aegisvault.presentation.connection_dialog", None)
+    sys.modules.pop("aegisvault.presentation.settings_dialog", None)
+    sys.modules.pop("aegisvault.presentation.vault_browser", None)
     # Force re-import of presentation submodules on the next test by clearing
     # the package-level cache as well.
     presentation = sys.modules.get("aegisvault.presentation")
     if presentation is not None:
         presentation.__dict__.pop("tray", None)
         presentation.__dict__.pop("connection_dialog", None)
+        presentation.__dict__.pop("settings_dialog", None)
+        presentation.__dict__.pop("vault_browser", None)

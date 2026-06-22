@@ -757,3 +757,67 @@ def test_tray_search_vault_opens_dialog(qt_stubs: None, config: AegisConfig) -> 
     assert opened[0][0] is tray.task_store
     assert opened[0][1] == config.paths.vault
     assert opened[0][2] == b"x" * 32
+
+
+def test_tray_settings_menu_item_opens_dialog(
+    qt_stubs: None, config: AegisConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Settings... menu item opens the settings dialog."""
+    from aegisvault.presentation import tray as tray_module
+    from aegisvault.presentation.tray import TrayApplication
+
+    opened: list[AegisConfig] = []
+
+    class FakeSettingsDialog:
+        def __init__(self, cfg: AegisConfig) -> None:
+            opened.append(cfg)
+
+        def exec(self) -> int:
+            return 1
+
+    monkeypatch.setattr(tray_module, "SettingsDialog", FakeSettingsDialog)
+
+    tray = TrayApplication(config=config)
+    tray._open_settings()
+
+    assert len(opened) == 1
+    assert opened[0] is tray.config
+
+
+def test_tray_vault_browser_menu_item_opens_dialog(
+    qt_stubs: None, config: AegisConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Vault Browser... menu item opens the Vault browser dialog."""
+    from aegisvault.presentation import tray as tray_module
+    from aegisvault.presentation.tray import TrayApplication
+
+    opened: list[tuple[object, object, object]] = []
+
+    class FakeVaultBrowser:
+        def __init__(self, task_store: object, vault_path: object, vault_key: object) -> None:
+            opened.append((task_store, vault_path, vault_key))
+
+        def exec(self) -> int:
+            return 1
+
+    monkeypatch.setattr(tray_module, "VaultBrowser", FakeVaultBrowser)
+
+    tray = TrayApplication(config=config, vault_key=b"k" * 32)
+    tray._open_vault_browser()
+
+    assert len(opened) == 1
+    assert opened[0][0] is tray.task_store
+    assert opened[0][1] == config.paths.vault
+    assert opened[0][2] == b"k" * 32
+
+
+def test_tray_menu_contains_settings_and_vault_browser(qt_stubs: None, config: AegisConfig) -> None:
+    """The main tray menu exposes Settings... and Vault Browser... entries."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    tray = TrayApplication(config=config)
+    tray._build_menu()
+
+    texts = _menu_texts(tray.menu)
+    assert "⚙️ Settings..." in texts
+    assert "🗄️ Vault Browser..." in texts

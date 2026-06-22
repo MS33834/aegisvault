@@ -1,8 +1,12 @@
 """Tests for sensitive operation security policy."""
 
+from pathlib import Path
+
 import pytest
 
+from aegisvault.config import AegisConfig
 from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.policy import (
     SecurityPolicyError,
     require_trusted_local_connection,
@@ -116,3 +120,48 @@ def test_decorator_rejects_mixed_local_and_cloud() -> None:
     )
     with pytest.raises(SecurityPolicyError):
         _sensitive_work(local, cloud)
+
+
+def test_policy_violation_is_audited(tmp_path: Path) -> None:
+    """require_trusted_local_connection logs a policy_violation event."""
+    config = AegisConfig()
+    config.paths.logs = tmp_path / "logs"
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+
+    cloud = Connection(
+        name="Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+    )
+    with pytest.raises(SecurityPolicyError):
+        require_trusted_local_connection(cloud, audit_logger=audit, operation="test_op")
+
+    records = audit.query(event_type="policy_violation")
+    assert len(records) == 1
+    assert records[0]["details"]["operation"] == "test_op"
+    assert records[0]["details"]["connection_name"] == "Cloud"
+
+
+def test_decorator_logs_policy_violation(tmp_path: Path) -> None:
+    """The sensitive_operation decorator forwards audit loggers to the policy check."""
+    config = AegisConfig()
+    config.paths.logs = tmp_path / "logs"
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+
+    @sensitive_operation
+    def _sensitive_work(conn: Connection, audit_logger: AuditLogger) -> str:
+        return "done"
+
+    cloud = Connection(
+        name="Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+    )
+    with pytest.raises(SecurityPolicyError):
+        _sensitive_work(cloud, audit)
+
+    records = audit.query(event_type="policy_violation")
+    assert len(records) == 1
+    assert records[0]["details"]["connection_name"] == "Cloud"

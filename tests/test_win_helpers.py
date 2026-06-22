@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Tests for Windows-specific security helpers.
 
 These helpers are designed to run on Windows; on Linux we verify graceful

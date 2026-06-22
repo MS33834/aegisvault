@@ -41,6 +41,8 @@ from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.presentation.connection_dialog import ConnectionManagerDialog
+from aegisvault.presentation.settings_dialog import SettingsDialog
+from aegisvault.presentation.vault_browser import VaultBrowser
 
 _STATE_ICONS: dict[str, str] = {
     TaskState.IDLE.name: "⏳",
@@ -144,6 +146,16 @@ class TrayApplication:
 
         self._build_tasks_menu()
         self.menu.addMenu(self.tasks_menu)
+
+        self.menu.addSeparator()
+
+        settings_action = QAction("⚙️ Settings...", self.menu)
+        settings_action.triggered.connect(self._open_settings)
+        self.menu.addAction(settings_action)
+
+        vault_browser_action = QAction("🗄️ Vault Browser...", self.menu)
+        vault_browser_action.triggered.connect(self._open_vault_browser)
+        self.menu.addAction(vault_browser_action)
 
         self.menu.addSeparator()
         self.menu.addSection("ℹ️ Help")
@@ -446,6 +458,22 @@ class TrayApplication:
         """Open the platform connection manager dialog."""
         manager = ConnectionManager(self.connections_path)
         dialog = ConnectionManagerDialog(manager)
+        dialog.exec()
+
+    def _open_settings(self) -> None:
+        """Open the settings dialog."""
+        config = self.config or AegisConfig()
+        dialog = SettingsDialog(config)
+        dialog.exec()
+
+    def _open_vault_browser(self) -> None:
+        """Open the Vault browser dialog."""
+        vault_path = (
+            self.config.paths.vault
+            if self.config is not None
+            else Path.home() / "AegisVault" / "Vault"
+        )
+        dialog = VaultBrowser(self.task_store, vault_path, self.vault_key)
         dialog.exec()
 
 

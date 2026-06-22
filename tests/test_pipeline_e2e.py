@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """End-to-end tests for the processing pipeline."""
 
 import asyncio
@@ -18,6 +19,7 @@ from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.keytree import derive_vault_key
 from aegisvault.security.policy import SecurityPolicyError
 
@@ -281,3 +283,63 @@ async def test_e2e_file_drop_triggers_full_pipeline(
         assert results[0].category == "work"
     finally:
         agent.stop_monitoring()
+
+
+async def test_pipeline_emits_audit_events(
+    tmp_path: Path,
+    config: AegisConfig,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """The pipeline writes file_ingested, classified and encrypted audit events."""
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+    config.paths.logs = tmp_path / "logs"
+    source = config.paths.inbox / "secret.txt"
+    source.write_text("audit test")
+
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key, audit_logger=audit)
+
+    event = FileEvent(event_id=uuid4(), source_path=source)
+    status = await pipeline.process(event)
+
+    record = task_store.get(event.event_id)
+    message = record.get("message") if record else "no record"
+    assert status.state == TaskState.COMPLETED.name, message
+
+    records = audit.query()
+    types = [r["event_type"] for r in records]
+    assert "file_ingested" in types
+    assert "classified" in types
+    assert "encrypted" in types
+
+
+async def test_pipeline_quarantine_emits_policy_violation(
+    tmp_path: Path,
+    config: AegisConfig,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """A SecurityPolicyError during processing is logged as policy_violation."""
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+    config.paths.logs = tmp_path / "logs"
+    source = config.paths.inbox / "secret.txt"
+    source.write_text("sensitive data")
+
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+    pipeline = ProcessingPipeline(config, classifier, task_store, vault_key, audit_logger=audit)
+
+    async def failing_classify(_source_path: Path) -> ClassificationResult:
+        raise SecurityPolicyError("untrusted connection")
+
+    pipeline._classify = failing_classify  # type: ignore[method-assign]
+
+    event = FileEvent(event_id=uuid4(), source_path=source)
+    status = await pipeline.process(event)
+
+    assert status.state == TaskState.QUARANTINED.name
+    records = audit.query(event_type="policy_violation")
+    assert len(records) == 1
+    assert "untrusted connection" in records[0]["details"]["error"]

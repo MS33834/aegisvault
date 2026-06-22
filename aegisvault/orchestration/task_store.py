@@ -1,5 +1,7 @@
 """SQLite-backed task context persistence."""
 
+import json
+import math
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -9,6 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from aegisvault.api.schemas import ClassificationResult, SearchResult, TaskStatus, TaskSummary
+from aegisvault.model.embedding import LocalEmbeddingProvider
 from aegisvault.orchestration.state_machine import TaskState
 
 
@@ -62,6 +65,7 @@ class TaskStore:
             if "updated_at" not in columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT ''")
             self._init_fts(conn)
+            self._init_vectors(conn)
             conn.commit()
 
     def _init_fts(self, conn: sqlite3.Connection) -> None:
@@ -104,6 +108,27 @@ class TaskStore:
         except sqlite3.Error:
             return False
         return any(str(row[0]) == "ENABLE_FTS5" for row in rows)
+
+    @staticmethod
+    def _init_vectors(conn: sqlite3.Connection) -> None:
+        """Create the vector index table for semantic search.
+
+        Vectors are stored as JSON arrays so the core package does not need
+        sqlite-vec or numpy.
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vault_vectors (
+                task_id TEXT PRIMARY KEY,
+                vault_path TEXT,
+                category TEXT,
+                summary TEXT,
+                vector TEXT,
+                model TEXT,
+                created_at TEXT
+            )
+            """
+        )
 
     @staticmethod
     def _now() -> str:
@@ -163,6 +188,19 @@ class TaskStore:
             )
             conn.commit()
 
+    def delete(self, task_id: UUID) -> None:
+        """Delete a task and its search index entries."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (str(task_id),))
+            if self._fts5_enabled:
+                conn.execute("DELETE FROM vault_fts WHERE task_id = ?", (str(task_id),))
+            else:
+                conn.execute(
+                    "DELETE FROM vault_fts_fallback WHERE task_id = ?",
+                    (str(task_id),),
+                )
+            conn.commit()
+
     def index_classification(
         self,
         task_id: UUID,
@@ -214,11 +252,86 @@ class TaskStore:
                 )
             conn.commit()
 
+    def index_embedding(
+        self,
+        task_id: UUID,
+        vault_path: Path,
+        classification: ClassificationResult,
+        provider: LocalEmbeddingProvider,
+        created_at: str | None = None,
+    ) -> None:
+        """Generate and store an embedding for summary/tags metadata."""
+        text = f"{classification.summary} {' '.join(classification.tags)}".strip()
+        if not text:
+            text = classification.category
+        vector = provider.embed([text])[0]
+        model_name = getattr(provider, "model_name", "unknown")
+        now = created_at or self._now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO vault_vectors
+                    (task_id, vault_path, category, summary, vector, model, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(task_id),
+                    str(vault_path),
+                    classification.category,
+                    classification.summary,
+                    json.dumps(vector),
+                    model_name,
+                    now,
+                ),
+            )
+            conn.commit()
+
     def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         """Search indexed vault metadata for the given keywords."""
         if self._fts5_enabled:
             return self._search_fts(query, top_k)
         return self._search_fallback(query, top_k)
+
+    def semantic_search(
+        self,
+        query: str,
+        top_k: int,
+        provider: LocalEmbeddingProvider,
+    ) -> list[SearchResult]:
+        """Search vector index by cosine similarity to the query embedding."""
+        query = query.strip()
+        if not query:
+            return []
+        query_vector = provider.embed([query])[0]
+        scored: list[tuple[float, sqlite3.Row]] = []
+        with self._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                "SELECT vault_path, category, summary, vector FROM vault_vectors"
+            ).fetchall()
+        for row in rows:
+            vector = json.loads(row["vector"])
+            score = self._cosine_similarity(query_vector, vector)
+            scored.append((score, row))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [
+            SearchResult(
+                vault_path=Path(row["vault_path"]),
+                category=row["category"],
+                summary=row["summary"],
+                score=score,
+            )
+            for score, row in scored[:top_k]
+        ]
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors without numpy."""
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
     def _search_fts(self, query: str, top_k: int) -> list[SearchResult]:
         """Execute an FTS5 search with prefix matching on each token."""
@@ -350,7 +463,7 @@ class TaskStore:
                 f"""
                 SELECT task_id, state, message, source_path
                 FROM tasks
-                WHERE state IN ({','.join('?' * len(states))})
+                WHERE state IN ({",".join("?" * len(states))})
                 {self._active_order_clause()}
                 LIMIT ?
                 """,

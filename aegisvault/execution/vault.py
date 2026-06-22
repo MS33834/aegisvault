@@ -8,6 +8,7 @@ orchestration layer that calls these primitives.
 from pathlib import Path
 
 from aegisvault.api.schemas import ClassificationResult, EncryptResult
+from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.crypto import decrypt_file_stream, encrypt_file_stream
 from aegisvault.security.keytree import derive_file_key, generate_salt
 
@@ -15,9 +16,15 @@ from aegisvault.security.keytree import derive_file_key, generate_salt
 class VaultManager:
     """Manage encrypted Vault storage."""
 
-    def __init__(self, vault_path: Path, vault_key: bytes) -> None:
+    def __init__(
+        self,
+        vault_path: Path,
+        vault_key: bytes,
+        audit_logger: AuditLogger | None = None,
+    ) -> None:
         self.vault_path = vault_path
         self.vault_key = vault_key
+        self.audit_logger = audit_logger
 
     def encrypt(
         self,
@@ -53,3 +60,11 @@ class VaultManager:
         """Decrypt a Vault file to destination."""
         file_key = derive_file_key(self.vault_key, salt)
         decrypt_file_stream(vault_path, destination, file_key)
+        if self.audit_logger is not None:
+            self.audit_logger.log(
+                "decrypted",
+                {
+                    "vault_path": str(vault_path),
+                    "destination": str(destination),
+                },
+            )

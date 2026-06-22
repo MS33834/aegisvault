@@ -13,6 +13,7 @@ from aegisvault.security.master_key import (
     DpapiMasterKeyProvider,
     FilePasswordProvider,
     TpmMasterKeyProvider,
+    _derive_final_key,
     create_master_key_provider,
     get_registered_providers,
     register_provider,
@@ -84,7 +85,9 @@ def test_file_password_provider_concurrent_init_converges(tmp_path: Path) -> Non
     assert p1.get_key() == p2.get_key()
 
 
-def test_file_password_provider_no_storage_path_uses_ephemeral_salt(caplog) -> None:
+def test_file_password_provider_no_storage_path_uses_ephemeral_salt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Without storage_path a random ephemeral salt is used and a warning is logged."""
     provider = FilePasswordProvider(password="hello-world")
     key1 = provider.get_key()
@@ -123,19 +126,20 @@ def test_file_password_provider_atomic_write_existing_file_directly(tmp_path: Pa
 
 
 def test_file_password_provider_atomic_write_closes_fd_on_error(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If writing fails the file descriptor is closed before the exception propagates."""
     fake_fd = 12345
     closed_fds = []
 
-    def fake_open(path, flags, mode):
+    def fake_open(path: str | os.PathLike[str], flags: int, mode: int) -> int:
         return fake_fd
 
-    def fake_fdopen(fd, mode):
+    def fake_fdopen(fd: int, mode: str) -> object:
         raise OSError("simulated write failure")
 
-    def fake_close(fd):
+    def fake_close(fd: int) -> None:
         closed_fds.append(fd)
 
     monkeypatch.setattr(os, "open", fake_open)
@@ -149,18 +153,18 @@ def test_file_password_provider_atomic_write_closes_fd_on_error(
 
 
 def test_file_password_provider_atomic_write_ignores_close_oserror(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An OSError while closing the fd is swallowed before the original exception."""
     fake_fd = 12345
 
-    def fake_open(path, flags, mode):
+    def fake_open(path: str | os.PathLike[str], flags: int, mode: int) -> int:
         return fake_fd
 
-    def fake_fdopen(fd, mode):
+    def fake_fdopen(fd: int, mode: str) -> object:
         raise OSError("simulated write failure")
 
-    def fake_close(fd):
+    def fake_close(fd: int) -> None:
         raise OSError("close failed")
 
     monkeypatch.setattr(os, "open", fake_open)
@@ -179,12 +183,103 @@ def test_file_password_provider_no_password() -> None:
         provider.get_key()
 
 
-def test_tpm_provider_not_implemented() -> None:
-    """TPM provider raises NotImplementedError."""
-    provider = TpmMasterKeyProvider(Path("/tmp/dummy"))
+def test_tpm_provider_can_be_instantiated_on_linux(tmp_path: Path) -> None:
+    """TPM provider is safe to construct on non-Windows platforms."""
+    provider = TpmMasterKeyProvider(tmp_path / "tpm.bin")
     assert not provider.exists()
-    with pytest.raises(NotImplementedError):
+    assert provider.tpm_key_name == "AegisVaultTPMMasterKey"
+
+
+def test_tpm_provider_get_key_on_linux_raises_clear_error(tmp_path: Path) -> None:
+    """TPM provider raises a clear RuntimeError when get_key is called on Linux."""
+    provider = TpmMasterKeyProvider(tmp_path / "tpm.bin")
+    with pytest.raises(RuntimeError, match="only available on Windows"):
         provider.get_key()
+
+
+def test_tpm_provider_exists_reflects_storage_file(tmp_path: Path) -> None:
+    """TPM provider exists() mirrors the storage file presence."""
+    storage = tmp_path / "tpm.bin"
+    provider = TpmMasterKeyProvider(storage)
+    assert not provider.exists()
+    storage.write_bytes(b"encrypted")
+    assert provider.exists()
+
+
+def test_tpm_provider_with_hello_salt_caches_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Windows APIs are mocked, TPM provider returns a deterministic key."""
+    storage = tmp_path / "tpm.bin"
+    provider = TpmMasterKeyProvider(storage, hello_salt=b"hello-salt" * 4)
+
+    encrypted: list[bytes] = []
+
+    def fake_encrypt(key_name: str, plaintext: bytes, overwrite: bool) -> bytes:
+        encrypted.append(plaintext)
+        return b"blob" + plaintext
+
+    def fake_decrypt(key_name: str, ciphertext: bytes) -> bytes:
+        return ciphertext[len("blob") :]
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        "aegisvault.security.master_key._ncrypt_encrypt_with_persistent_key",
+        fake_encrypt,
+    )
+    monkeypatch.setattr(
+        "aegisvault.security.master_key._ncrypt_decrypt_with_persistent_key",
+        fake_decrypt,
+    )
+
+    key1 = provider.get_key()
+    key2 = provider.get_key()
+    assert len(key1) == 32
+    assert key1 == key2
+    assert len(encrypted) == 1
+    assert storage.read_bytes() == b"blob" + encrypted[0]
+
+
+def test_tpm_provider_requires_existing_blob_when_decrypting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decrypt path reads the existing blob and derives the same key with salt."""
+    storage = tmp_path / "tpm.bin"
+    storage.write_bytes(b"encrypted-material")
+    provider = TpmMasterKeyProvider(storage, hello_salt=b"salt" * 8)
+
+    def fake_decrypt(key_name: str, ciphertext: bytes) -> bytes:
+        return b"raw-key-material" * 2
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        "aegisvault.security.master_key._ncrypt_decrypt_with_persistent_key",
+        fake_decrypt,
+    )
+
+    key = provider.get_key()
+    assert len(key) == 32
+    # Same raw material and salt must produce the same key.
+    assert key == provider.get_key()
+
+
+def test_derive_final_key_without_salt_returns_material() -> None:
+    """Without a hello salt the TPM material is used directly."""
+    material = os.urandom(32)
+    assert _derive_final_key(material, None) == material
+
+
+def test_derive_final_key_with_salt_is_deterministic() -> None:
+    """HKDF with the same salt and material is deterministic."""
+    material = b"material" * 4
+    salt = b"salt" * 8
+    key1 = _derive_final_key(material, salt)
+    key2 = _derive_final_key(material, salt)
+    assert len(key1) == 32
+    assert key1 == key2
+    assert key1 != material
 
 
 def test_dpapi_provider_exists(tmp_path: Path) -> None:
@@ -205,7 +300,8 @@ def test_dpapi_provider_get_key_on_linux(tmp_path: Path) -> None:
 
 
 def test_dpapi_provider_protect_and_store_delegates_to_win_helpers(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_protect_and_store writes the output of win_helpers.protect_data to disk."""
     provider = DpapiMasterKeyProvider(storage_path=tmp_path / "master_key.bin")
@@ -219,7 +315,8 @@ def test_dpapi_provider_protect_and_store_delegates_to_win_helpers(
 
 
 def test_dpapi_provider_generates_and_protects_new_key_on_windows(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """On Windows a missing storage file triggers key generation and protection."""
     provider = DpapiMasterKeyProvider(storage_path=tmp_path / "master_key.bin")
@@ -249,6 +346,11 @@ def test_factory_creates_builtin_providers(tmp_path: Path) -> None:
 
     tpm = create_master_key_provider("tpm", tmp_path / "tpm.bin")
     assert isinstance(tpm, TpmMasterKeyProvider)
+    assert tpm.hello_salt is None
+
+    tpm_with_salt = create_master_key_provider("tpm", tmp_path / "tpm_salt.bin", hello_salt=b"salt")
+    assert isinstance(tpm_with_salt, TpmMasterKeyProvider)
+    assert tpm_with_salt.hello_salt == b"salt"
 
     # Case-insensitive lookup.
     assert isinstance(
@@ -283,10 +385,10 @@ def test_register_provider_round_trip(tmp_path: Path) -> None:
 def test_register_provider_rejects_non_provider() -> None:
     """Registering a class that is not a MasterKeyProvider raises TypeError."""
     with pytest.raises(TypeError):
-        register_provider("bad", str)
+        register_provider("bad", str)  # type: ignore[arg-type]
 
 
-def test_factory_reuses_cached_dpapi_key(tmp_path: Path, monkeypatch) -> None:
+def test_factory_reuses_cached_dpapi_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """DPAPI provider caches the decrypted key and does not re-read the file."""
     storage = tmp_path / "master_key.bin"
     storage.write_bytes(b"protected")

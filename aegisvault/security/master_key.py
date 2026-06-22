@@ -193,21 +193,269 @@ class DpapiMasterKeyProvider(MasterKeyProvider):
 
 
 class TpmMasterKeyProvider(MasterKeyProvider):
-    """TPM-backed master key provider (placeholder for Phase 2+)."""
+    """TPM-backed master key provider.
 
-    def __init__(self, storage_path: Path) -> None:
+    A 32-byte master-key material is generated once, encrypted with a
+    persistent TPM RSA key (via ``NCryptEncrypt``), and stored on disk. The
+    material can only be recovered by decrypting the blob with the same TPM
+    key (via ``NCryptDecrypt``).
+
+    On non-Windows platforms the provider can be instantiated and queried, but
+    ``get_key()`` raises ``RuntimeError`` because the TPM/NCrypt API is not
+    available. A Linux fallback using ``tpm2_createprimary``/``tpm2_create``/
+    ``tpm2_unseal`` is intentionally left as an interface-only placeholder for
+    this phase.
+
+    When *hello_salt* is supplied, the raw TPM-protected material is further
+    derived through HKDF-SHA256, producing a master key that additionally
+    requires Windows Hello (or another source of the salt) to unlock.
+    """
+
+    TPM_RSA_KEY_LEN = 2048
+    MASTER_KEY_LEN = 32
+
+    def __init__(
+        self,
+        storage_path: Path,
+        tpm_key_name: str = "AegisVaultTPMMasterKey",
+        hello_salt: bytes | None = None,
+    ) -> None:
         self.storage_path = storage_path
+        self.tpm_key_name = tpm_key_name
+        self.hello_salt = hello_salt
+        self._key: bytes | None = None
 
     def get_key(self) -> bytes:
-        """Not yet implemented."""
-        raise NotImplementedError(
-            "TPM master key provider is not implemented in this phase. "
-            "Use DPAPI or FilePassword on Windows 11."
-        )
+        """Return the master key, creating/protecting it if necessary."""
+        if self._key is not None:
+            return self._key
+        if sys.platform != "win32":
+            raise RuntimeError(
+                "TPM master key provider is only available on Windows. "
+                "Use FilePasswordProvider or DPAPI on this platform."
+            )
+        if not self.exists():
+            key_material = generate_salt()
+            encrypted = _ncrypt_encrypt_with_persistent_key(
+                self.tpm_key_name,
+                key_material,
+                overwrite=True,
+            )
+            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            self.storage_path.write_bytes(encrypted)
+        else:
+            encrypted = self.storage_path.read_bytes()
+            key_material = _ncrypt_decrypt_with_persistent_key(
+                self.tpm_key_name,
+                encrypted,
+            )
+
+        self._key = _derive_final_key(key_material, self.hello_salt)
+        return self._key
 
     def exists(self) -> bool:
-        """Return False; TPM provider is not implemented."""
-        return False
+        """Return True if the encrypted master-key blob exists."""
+        return self.storage_path.exists()
+
+
+def _derive_final_key(key_material: bytes, hello_salt: bytes | None) -> bytes:
+    """Derive the final 32-byte master key from TPM-decrypted material.
+
+    If *hello_salt* is provided it is used as the HKDF salt, meaning the final
+    key can only be produced when the salt (e.g. from Windows Hello) is also
+    available. Otherwise *key_material* is returned unchanged.
+    """
+    if hello_salt is None:
+        return key_material
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=hello_salt,
+        info=b"aegisvault-tpm-hello-v1",
+    )
+    return hkdf.derive(key_material)
+
+
+if sys.platform == "win32":
+    import ctypes
+    import ctypes.wintypes as wintypes
+
+    _MS_PLATFORM_CRYPTO_PROVIDER = "Microsoft Platform Crypto Provider"
+    _BCRYPT_RSA_ALGORITHM = "RSA"
+    _NCRYPT_OVERWRITE_KEY_FLAG = 0x00000080
+    _NCRYPT_PAD_PKCS1_FLAG = 0x00000002
+
+    _NCRYPT = ctypes.windll.ncrypt
+
+    def _check_ncrypt_status(status: int, operation: str) -> None:
+        """Raise RuntimeError if an NCrypt call returned a non-zero status."""
+        if status != 0:
+            raise RuntimeError(f"{operation} failed with status 0x{status:08X}")
+
+    def _open_tpm_provider() -> ctypes.c_void_p:
+        """Open the Microsoft Platform Crypto Provider (TPM)."""
+        provider = ctypes.c_void_p()
+        status = _NCRYPT.NCryptOpenStorageProvider(
+            ctypes.byref(provider),
+            _MS_PLATFORM_CRYPTO_PROVIDER,
+            0,
+        )
+        _check_ncrypt_status(status, "NCryptOpenStorageProvider")
+        return provider
+
+    def _get_or_create_persistent_key(
+        provider: ctypes.c_void_p,
+        key_name: str,
+        overwrite: bool,
+    ) -> ctypes.c_void_p:
+        """Open an existing persisted TPM key or create a new RSA key."""
+        key = ctypes.c_void_p()
+        flags = _NCRYPT_OVERWRITE_KEY_FLAG if overwrite else 0
+
+        # Try to open an existing persisted key first.
+        status = _NCRYPT.NCryptOpenKey(
+            provider,
+            ctypes.byref(key),
+            key_name,
+            0,
+            0,
+        )
+        if status == 0:
+            return key
+
+        # Not present: create a new persisted RSA key.
+        status = _NCRYPT.NCryptCreatePersistedKey(
+            provider,
+            ctypes.byref(key),
+            _BCRYPT_RSA_ALGORITHM,
+            key_name,
+            0,
+            flags,
+        )
+        _check_ncrypt_status(status, "NCryptCreatePersistedKey")
+
+        key_len = wintypes.DWORD(TpmMasterKeyProvider.TPM_RSA_KEY_LEN)
+        status = _NCRYPT.NCryptSetProperty(
+            key,
+            "Length",
+            ctypes.cast(ctypes.byref(key_len), ctypes.POINTER(wintypes.BYTE)),
+            ctypes.sizeof(key_len),
+            0,
+        )
+        _check_ncrypt_status(status, "NCryptSetProperty(Length)")
+
+        status = _NCRYPT.NCryptFinalizeKey(key, 0)
+        _check_ncrypt_status(status, "NCryptFinalizeKey")
+        return key
+
+    def _encrypt_with_key(key: ctypes.c_void_p, plaintext: bytes) -> bytes:
+        """Encrypt *plaintext* with the public portion of *key*."""
+        input_buf = ctypes.create_string_buffer(plaintext)
+        output_len = wintypes.DWORD(0)
+        status = _NCRYPT.NCryptEncrypt(
+            key,
+            ctypes.cast(input_buf, ctypes.POINTER(wintypes.BYTE)),
+            len(plaintext),
+            None,
+            None,
+            0,
+            ctypes.byref(output_len),
+            _NCRYPT_PAD_PKCS1_FLAG,
+        )
+        _check_ncrypt_status(status, "NCryptEncrypt(size probe)")
+
+        output_buf = ctypes.create_string_buffer(output_len.value)
+        status = _NCRYPT.NCryptEncrypt(
+            key,
+            ctypes.cast(input_buf, ctypes.POINTER(wintypes.BYTE)),
+            len(plaintext),
+            None,
+            ctypes.cast(output_buf, ctypes.POINTER(wintypes.BYTE)),
+            output_len.value,
+            ctypes.byref(output_len),
+            _NCRYPT_PAD_PKCS1_FLAG,
+        )
+        _check_ncrypt_status(status, "NCryptEncrypt")
+        return bytes(output_buf[: output_len.value])
+
+    def _decrypt_with_key(key: ctypes.c_void_p, ciphertext: bytes) -> bytes:
+        """Decrypt *ciphertext* using the private key protected by the TPM."""
+        input_buf = ctypes.create_string_buffer(ciphertext)
+        output_len = wintypes.DWORD(0)
+        status = _NCRYPT.NCryptDecrypt(
+            key,
+            ctypes.cast(input_buf, ctypes.POINTER(wintypes.BYTE)),
+            len(ciphertext),
+            None,
+            None,
+            0,
+            ctypes.byref(output_len),
+            _NCRYPT_PAD_PKCS1_FLAG,
+        )
+        _check_ncrypt_status(status, "NCryptDecrypt(size probe)")
+
+        output_buf = ctypes.create_string_buffer(output_len.value)
+        status = _NCRYPT.NCryptDecrypt(
+            key,
+            ctypes.cast(input_buf, ctypes.POINTER(wintypes.BYTE)),
+            len(ciphertext),
+            None,
+            ctypes.cast(output_buf, ctypes.POINTER(wintypes.BYTE)),
+            output_len.value,
+            ctypes.byref(output_len),
+            _NCRYPT_PAD_PKCS1_FLAG,
+        )
+        _check_ncrypt_status(status, "NCryptDecrypt")
+        return bytes(output_buf[: output_len.value])
+
+    def _ncrypt_encrypt_with_persistent_key(
+        key_name: str,
+        plaintext: bytes,
+        overwrite: bool,
+    ) -> bytes:
+        """Encrypt *plaintext* using a persistent TPM RSA key."""
+        provider = _open_tpm_provider()
+        key = ctypes.c_void_p()
+        try:
+            key = _get_or_create_persistent_key(provider, key_name, overwrite)
+            return _encrypt_with_key(key, plaintext)
+        finally:
+            if key:
+                _NCRYPT.NCryptFreeObject(key)
+            _NCRYPT.NCryptFreeObject(provider)
+
+    def _ncrypt_decrypt_with_persistent_key(
+        key_name: str,
+        ciphertext: bytes,
+    ) -> bytes:
+        """Decrypt *ciphertext* using a persistent TPM RSA key."""
+        provider = _open_tpm_provider()
+        key = ctypes.c_void_p()
+        try:
+            key = _get_or_create_persistent_key(provider, key_name, overwrite=False)
+            return _decrypt_with_key(key, ciphertext)
+        finally:
+            if key:
+                _NCRYPT.NCryptFreeObject(key)
+            _NCRYPT.NCryptFreeObject(provider)
+
+else:
+
+    def _ncrypt_encrypt_with_persistent_key(
+        key_name: str,
+        plaintext: bytes,
+        overwrite: bool,
+    ) -> bytes:
+        raise RuntimeError("TPM/NCrypt operations are only available on Windows")
+
+    def _ncrypt_decrypt_with_persistent_key(
+        key_name: str,
+        ciphertext: bytes,
+    ) -> bytes:
+        raise RuntimeError("TPM/NCrypt operations are only available on Windows")
 
 
 def create_master_key_provider(
@@ -215,6 +463,7 @@ def create_master_key_provider(
     storage_path: Path,
     password: str | None = None,
     password_file: Path | None = None,
+    hello_salt: bytes | None = None,
 ) -> MasterKeyProvider:
     """Factory for master key providers.
 
@@ -233,7 +482,7 @@ def create_master_key_provider(
     if name == "dpapi":
         return DpapiMasterKeyProvider(storage_path)
     if name == "tpm":
-        return TpmMasterKeyProvider(storage_path)
+        return TpmMasterKeyProvider(storage_path, hello_salt=hello_salt)
     provider_cls = _REGISTRY.get(name)
     if provider_cls is None:
         raise ValueError(f"Unknown master key provider: {provider_name}")

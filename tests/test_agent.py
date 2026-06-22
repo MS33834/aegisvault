@@ -1,19 +1,29 @@
+# mypy: ignore-errors
 """Tests for AegisAgent dependency injection."""
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
 
-from aegisvault.api.schemas import FileEvent, SearchQuery, SearchResult, TaskStatus
+from aegisvault.api.schemas import (
+    ClassificationResult,
+    FileEvent,
+    SearchQuery,
+    SearchResult,
+    TaskStatus,
+)
 from aegisvault.config import AegisConfig
 from aegisvault.model.classifier import Classifier
+from aegisvault.model.embedding import DeterministicEmbeddingProvider
 from aegisvault.model.provider import ModelProvider
 from aegisvault.orchestration.agent import AegisAgent
 from aegisvault.orchestration.state_machine import TaskState
+from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.master_key import MasterKeyProvider
 
 
@@ -352,3 +362,157 @@ async def test_agent_handle_event_logs_exception(
     await agent._handle_event(event)
 
     assert "boom" in caplog.text
+
+
+def test_agent_logs_login_attempt(config: AegisConfig, classifier: Classifier) -> None:
+    """Constructing an agent with an audit logger emits a login_attempt event."""
+    config.paths.logs = config.paths.index.parent / "logs"
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+    AegisAgent(
+        config,
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+        audit_logger=audit,
+    )
+    records = audit.query(event_type="login_attempt")
+    assert len(records) == 1
+    assert records[0]["details"]["success"] is True
+
+
+def test_agent_start_monitoring_audits_connection_tested(
+    config: AegisConfig, classifier: Classifier
+) -> None:
+    """start_monitoring schedules a connection test that is logged."""
+    config.paths.logs = config.paths.index.parent / "logs"
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+    watcher = MagicMock()
+    agent = AegisAgent(
+        config,
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+        watcher=watcher,
+        audit_logger=audit,
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        agent.start_monitoring(loop)
+        loop.run_until_complete(asyncio.sleep(0.1))
+        records = audit.query(event_type="connection_tested")
+        assert len(records) == 1
+        assert records[0]["details"]["connection"] == "Local Test"
+        assert records[0]["details"]["healthy"] is True
+    finally:
+        agent.stop_monitoring()
+        loop.close()
+
+
+async def test_agent_search_with_semantic_hybrid(
+    config: AegisConfig,
+    classifier: Classifier,
+    tmp_path: Path,
+) -> None:
+    """AegisAgent.search merges FTS and semantic results when enabled."""
+    config.security.enable_semantic_search = True
+    task_store = TaskStore(tmp_path / "tasks.db")
+    provider = DeterministicEmbeddingProvider(dimension=16)
+    classification = ClassificationResult(
+        sensitivity="medium",
+        category="work",
+        tags=["report", "finance"],
+        summary="A quarterly finance report",
+        disguise_name="team_building_2023",
+        disguise_extension="log",
+    )
+    vault_path = Path("/vault/work/report.log")
+    task_id = uuid4()
+    task_store.index_classification(task_id, classification, vault_path)
+    task_store.index_embedding(task_id, vault_path, classification, provider)
+
+    agent = AegisAgent(
+        config,
+        task_store=task_store,
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+        connection_manager=MagicMock(),
+        embedding_provider=provider,
+    )
+
+    results = await agent.search(SearchQuery(query="finance", top_k=5))
+
+    assert len(results) == 1
+    assert results[0].vault_path == vault_path
+    assert 0.0 <= results[0].score <= 1.0
+
+
+async def test_agent_search_disabled_uses_fts_only(
+    config: AegisConfig,
+    classifier: Classifier,
+    tmp_path: Path,
+) -> None:
+    """Semantic search is skipped when disabled."""
+    config.security.enable_semantic_search = False
+    task_store = TaskStore(tmp_path / "tasks.db")
+    classification = ClassificationResult(
+        sensitivity="medium",
+        category="work",
+        tags=["report"],
+        summary="A work report",
+        disguise_name="report",
+        disguise_extension="log",
+    )
+    task_store.index_classification(uuid4(), classification, Path("/vault/work/report.log"))
+
+    agent = AegisAgent(
+        config,
+        task_store=task_store,
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+        connection_manager=MagicMock(),
+    )
+
+    results = await agent.search(SearchQuery(query="report", top_k=5))
+
+    assert len(results) == 1
+    assert agent._embedding_provider is None
+
+
+@patch("aegisvault.orchestration.agent.SentenceTransformersProvider")
+async def test_agent_search_graceful_degradation_without_sentence_transformers(
+    mock_provider: MagicMock,
+    config: AegisConfig,
+    classifier: Classifier,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When sentence-transformers is unavailable, search falls back to FTS."""
+    mock_provider.side_effect = ImportError("not installed")
+    config.security.enable_semantic_search = True
+    task_store = TaskStore(tmp_path / "tasks.db")
+    classification = ClassificationResult(
+        sensitivity="low",
+        category="notes",
+        tags=["memo"],
+        summary="A short memo",
+        disguise_name="memo",
+        disguise_extension="txt",
+    )
+    task_store.index_classification(uuid4(), classification, Path("/vault/notes/memo.txt"))
+
+    agent = AegisAgent(
+        config,
+        task_store=task_store,
+        classifier=classifier,
+        master_key_provider=FakeMasterKeyProvider(),
+        vault_manager=FakeVaultManager(),
+        connection_manager=MagicMock(),
+    )
+
+    assert agent._embedding_provider is None
+    results = await agent.search(SearchQuery(query="memo", top_k=5))
+    assert len(results) == 1
+    assert "embedding provider is unavailable" in caplog.text

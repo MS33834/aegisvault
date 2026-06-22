@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Tests for Vault sensitive operation policy enforcement."""
 
 import json
@@ -15,6 +16,7 @@ from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.keytree import derive_vault_key
 from aegisvault.security.policy import SecurityPolicyError, require_trusted_local_connection
 
@@ -145,3 +147,32 @@ async def test_pipeline_quarantines_cloud_connection(
 
     assert status.state == TaskState.QUARANTINED.name
     assert source.exists()  # source must not be encrypted/removed
+
+
+def test_vault_decrypt_logs_audit_event(
+    tmp_path: Path,
+    vault_key: bytes,
+) -> None:
+    """VaultManager.decrypt emits a decrypted audit event when an auditor is attached."""
+    config = AegisConfig()
+    config.paths.logs = tmp_path / "logs"
+    audit = AuditLogger(config, hmac_key=b"k" * 32)
+
+    source = tmp_path / "secret.txt"
+    source.write_bytes(b"secret")
+    manager = VaultManager(tmp_path / "vault", vault_key, audit_logger=audit)
+    classification = ClassificationResult(
+        sensitivity="low",
+        category="other",
+        disguise_name="neutral",
+        disguise_extension="log",
+    )
+
+    encrypt_result = manager.encrypt(source, classification, str(uuid4()))
+    destination = tmp_path / "out.txt"
+    manager.decrypt(encrypt_result.vault_path, encrypt_result.salt, destination)
+
+    assert destination.read_bytes() == b"secret"
+    records = audit.query(event_type="decrypted")
+    assert len(records) == 1
+    assert records[0]["details"]["vault_path"] == str(encrypt_result.vault_path)

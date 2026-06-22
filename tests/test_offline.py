@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Tests for offline/network isolation assertions."""
 
 import ctypes

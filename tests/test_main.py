@@ -4,8 +4,11 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from aegisvault.__main__ import (
     _create_tray_app,
+    _master_key_storage_path,
     build_config,
     main,
     parse_args,
@@ -202,3 +205,82 @@ def test_main_no_tray_does_not_import_qt() -> None:
             sys.modules[module_path] = real_module
         else:
             sys.modules.pop(module_path, None)
+
+
+def test_master_key_storage_path_derived_from_connections() -> None:
+    """The master key storage path lives next to the connections file."""
+    from aegisvault.config import AegisConfig
+
+    config = AegisConfig()
+    config.paths.connections = Path("/tmp/AegisVault/Config/connections.json")
+    assert _master_key_storage_path(config) == Path("/tmp/AegisVault/Config/master_key.bin")
+
+
+def test_main_with_windows_hello_passes_salt_to_provider() -> None:
+    """When Windows Hello is enabled, the CLI obtains a salt and builds the provider."""
+    from aegisvault.config import AegisConfig
+
+    config = AegisConfig()
+    config.security.windows_hello_enabled = True
+    config.security.master_key_provider = "TPM"
+
+    mock_provider = MagicMock()
+    mock_provider.hello_salt = b"hello-salt"
+
+    with (
+        patch("aegisvault.__main__.parse_args", return_value=parse_args(["--no-tray"])),
+        patch("aegisvault.__main__.build_config", return_value=config),
+        patch("aegisvault.__main__.AuditLogger") as mock_audit,
+        patch(
+            "aegisvault.__main__.windows_hello.get_key_derivation_salt",
+            return_value=b"hello-salt",
+        ) as mock_get_salt,
+        patch(
+            "aegisvault.__main__.create_master_key_provider",
+            return_value=mock_provider,
+        ) as mock_create_provider,
+        patch("aegisvault.__main__.AegisAgent") as mock_agent_cls,
+        patch("aegisvault.__main__.run_headless") as mock_run,
+    ):
+        mock_agent = MagicMock()
+        mock_agent_cls.return_value = mock_agent
+        result = main([])
+
+    assert result == 0
+    mock_get_salt.assert_called_once_with(_master_key_storage_path(config))
+    mock_create_provider.assert_called_once_with(
+        "TPM",
+        _master_key_storage_path(config),
+        password=None,
+        hello_salt=b"hello-salt",
+    )
+    mock_agent_cls.assert_called_once_with(
+        config,
+        audit_logger=mock_audit.return_value,
+        master_key_provider=mock_provider,
+    )
+    mock_run.assert_called_once_with(mock_agent)
+
+
+def test_main_with_windows_hello_propagates_verification_failure() -> None:
+    """If Windows Hello verification fails, the CLI does not start the agent."""
+    from aegisvault.config import AegisConfig
+    from aegisvault.security.windows_hello import WindowsHelloError
+
+    config = AegisConfig()
+    config.security.windows_hello_enabled = True
+
+    with (
+        patch("aegisvault.__main__.parse_args", return_value=parse_args(["--no-tray"])),
+        patch("aegisvault.__main__.build_config", return_value=config),
+        patch("aegisvault.__main__.AuditLogger"),
+        patch(
+            "aegisvault.__main__.windows_hello.get_key_derivation_salt",
+            side_effect=WindowsHelloError("cancelled"),
+        ),
+        patch("aegisvault.__main__.AegisAgent") as mock_agent_cls,
+    ):
+        with pytest.raises(WindowsHelloError, match="cancelled"):
+            main([])
+
+    mock_agent_cls.assert_not_called()
