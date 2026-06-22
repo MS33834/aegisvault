@@ -105,10 +105,12 @@ class ProcessingPipeline:
         classification: ClassificationResult,
         result: EncryptResult,
     ) -> None:
-        """Index metadata for later retrieval (stub)."""
-        index_dir = self.config.paths.index
-        index_dir.mkdir(parents=True, exist_ok=True)
-        # Phase 3: implement vector + metadata index.
+        """Index classification metadata for full-text search."""
+        self.task_store.index_classification(
+            task_id=result.task_id,
+            classification=classification,
+            vault_path=result.vault_path,
+        )
 
     def _secure_delete(self, source_path: Path) -> None:
         """Overwrite and delete original Inbox file.

@@ -262,17 +262,26 @@ class FakeComboBox:
     def __init__(self) -> None:
         self._items: list[str] = []
         self._current = ""
+        self._editable = False
 
     def addItems(self, items: list[str]) -> None:
         self._items = list(items)
         if self._items and not self._current:
             self._current = self._items[0]
 
+    def addItem(self, text: str) -> None:
+        self._items.append(text)
+        if not self._current:
+            self._current = text
+
     def currentText(self) -> str:
         return self._current
 
     def setCurrentText(self, text: str) -> None:
         self._current = text
+
+    def setEditable(self, editable: bool) -> None:
+        self._editable = editable
 
 
 class FakeCheckBox:
@@ -334,6 +343,7 @@ class FakeTableWidget:
         self._edit_triggers = 0
         self._selected: list[FakeTableWidgetItem] = []
         self._header = FakeHeaderView()
+        self.cellDoubleClicked = FakeSignal()
 
     def setColumnCount(self, count: int) -> None:
         self._column_count = count
@@ -367,6 +377,11 @@ class FakeTableWidget:
     def select_row(self, row: int) -> None:
         """Test helper to select a whole row."""
         self._selected = [item for (r, c), item in self._items.items() if r == row]
+
+    def emit_cell_double_clicked(self, row: int, column: int) -> None:
+        """Emit the cellDoubleClicked signal to connected handlers."""
+        for callback in self.cellDoubleClicked.connected:
+            callback(row, column)
 
 
 class FakeHeaderView:
@@ -484,7 +499,11 @@ def restore_modules(saved_modules: dict[str, Any]) -> None:
     """Restore the original PyQt6 modules and clear submodule caches."""
     import sys
 
-    sys.modules.update(saved_modules)
+    for name, module in saved_modules.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
     sys.modules.pop("aegisvault.presentation.tray", None)
     sys.modules.pop("aegisvault.presentation.connection_dialog", None)
     # Force re-import of presentation submodules on the next test by clearing

@@ -10,11 +10,13 @@ from aegisvault.security import firewall
 
 def test_block_command_contains_required_parts() -> None:
     """Generated block command includes name, direction, program, action."""
-    cmd = firewall.build_block_rule_command(Path(r"C:\AegisVault\aegisvault.exe"))
+    cmd = firewall.build_block_rule_command(Path("/tmp/aegisvault"))
     assert firewall.RULE_NAME in cmd
     assert "Outbound" in cmd
-    assert "C:\\AegisVault\\aegisvault.exe" in cmd
+    assert "/tmp/aegisvault" in cmd
     assert "Block" in cmd
+    assert "-Enabled True" in cmd
+    assert "-PolicyStore ActiveStore" in cmd
 
 
 def test_block_command_escapes_single_quotes() -> None:

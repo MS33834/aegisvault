@@ -4,11 +4,15 @@ These helpers inspect a process's TCP connections to assert that the
 AegisVault core process has no outbound (client-side) connections.
 """
 
+import ctypes
 import ipaddress
 import re
 import socket
+import struct
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import ClassVar
 
 
 def _is_local_address(ip: str) -> bool:
@@ -107,9 +111,128 @@ def get_outbound_connections(
 
 
 def _parse_windows_tcp(pid: int) -> list[tuple[str, int, str, int]]:
-    """Placeholder for Windows TCP connection enumeration."""
-    # Phase 2: use GetExtendedTcpTable or netstat -ano filtered by PID.
-    return []
+    """Enumerate TCP connections for *pid* using GetExtendedTcpTable.
+
+    Returns a list of (local_ip, local_port, remote_ip, remote_port) tuples for
+    established (state 1) and close-wait (state 8) connections. IPv4 and IPv6
+    tables are both inspected.
+
+    On non-Windows platforms this function returns an empty list so callers can
+    run in mock/stub mode on Linux.
+    """
+    if sys.platform != "win32":
+        return []
+
+    from ctypes import wintypes
+
+    _tcp_table_owner_pid_all = 5
+    _af_inet = 2
+    _af_inet6 = 23
+    _error_insufficient_buffer = 122
+    _error_success = 0
+
+    class MIB_TCPROW_OWNER_PID(ctypes.Structure):  # noqa: N801
+        _fields_: ClassVar[list[tuple[str, type]]] = [
+            ("dwState", wintypes.DWORD),
+            ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    class MIB_TCPTABLE_OWNER_PID(ctypes.Structure):  # noqa: N801
+        _fields_: ClassVar[list[tuple[str, type]]] = [
+            ("dwNumEntries", wintypes.DWORD),
+            ("table", MIB_TCPROW_OWNER_PID * 1),
+        ]
+
+    class MIB_TCP6ROW_OWNER_PID(ctypes.Structure):  # noqa: N801
+        _fields_: ClassVar[list[tuple[str, type]]] = [
+            ("ucLocalAddr", wintypes.BYTE * 16),
+            ("dwLocalScopeId", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("ucRemoteAddr", wintypes.BYTE * 16),
+            ("dwRemoteScopeId", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwState", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    class MIB_TCP6TABLE_OWNER_PID(ctypes.Structure):  # noqa: N801
+        _fields_: ClassVar[list[tuple[str, type]]] = [
+            ("dwNumEntries", wintypes.DWORD),
+            ("table", MIB_TCP6ROW_OWNER_PID * 1),
+        ]
+
+    get_extended_tcp_table = ctypes.windll.iphlpapi.GetExtendedTcpTable
+    get_extended_tcp_table.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.DWORD,
+        wintypes.ULONG,
+        wintypes.DWORD,
+        wintypes.ULONG,
+    ]
+    get_extended_tcp_table.restype = wintypes.DWORD
+
+    def _enum(
+        af: int,
+        row_size: int,
+        parse: Callable[[bytes, int], tuple[int, int, str, int, str, int]],
+    ) -> list[tuple[str, int, str, int]]:
+        size = wintypes.DWORD(0)
+        res = get_extended_tcp_table(None, ctypes.byref(size), 1, af, _tcp_table_owner_pid_all, 0)
+        if res != _error_insufficient_buffer:
+            return []
+        buffer = ctypes.create_string_buffer(size.value)
+        res = get_extended_tcp_table(buffer, ctypes.byref(size), 1, af, _tcp_table_owner_pid_all, 0)
+        if res != _error_success:
+            return []
+        raw = bytes(buffer)
+        num_entries = struct.unpack_from("<I", raw, 0)[0]
+        results: list[tuple[str, int, str, int]] = []
+        offset = 4
+        for _ in range(num_entries):
+            state, owning_pid, local_ip, local_port, remote_ip, remote_port = parse(raw, offset)
+            if owning_pid == pid and state in {1, 8}:
+                results.append((local_ip, local_port, remote_ip, remote_port))
+            offset += row_size
+        return results
+
+    def _parse_v4(raw: bytes, offset: int) -> tuple[int, int, str, int, str, int]:
+        state, laddr, lport, raddr, rport, owning_pid = struct.unpack_from("<IIIIII", raw, offset)
+        local_ip = socket.inet_ntoa(struct.pack("<I", laddr))
+        remote_ip = socket.inet_ntoa(struct.pack("<I", raddr))
+        return (
+            state,
+            owning_pid,
+            local_ip,
+            socket.ntohs(lport),
+            remote_ip,
+            socket.ntohs(rport),
+        )
+
+    def _parse_v6(raw: bytes, offset: int) -> tuple[int, int, str, int, str, int]:
+        laddr = raw[offset : offset + 16]
+        _lscope, lport = struct.unpack_from("<II", raw, offset + 16)
+        raddr = raw[offset + 24 : offset + 40]
+        _rscope, rport, state, owning_pid = struct.unpack_from("<IIII", raw, offset + 40)
+        local_ip = socket.inet_ntop(socket.AF_INET6, laddr)
+        remote_ip = socket.inet_ntop(socket.AF_INET6, raddr)
+        return (
+            state,
+            owning_pid,
+            local_ip,
+            socket.ntohs(lport),
+            remote_ip,
+            socket.ntohs(rport),
+        )
+
+    connections: list[tuple[str, int, str, int]] = []
+    connections.extend(_enum(_af_inet, 24, _parse_v4))
+    connections.extend(_enum(_af_inet6, 56, _parse_v6))
+    return connections
 
 
 def has_outbound_connection(

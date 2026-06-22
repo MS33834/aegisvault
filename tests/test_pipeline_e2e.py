@@ -1,16 +1,19 @@
 """End-to-end tests for the processing pipeline."""
 
+import asyncio
 import json
+import sys
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from aegisvault.api.schemas import ClassificationResult, FileEvent
+from aegisvault.api.schemas import ClassificationResult, FileEvent, SearchQuery
 from aegisvault.config import AegisConfig
 from aegisvault.execution.vault import VaultManager
 from aegisvault.model.classifier import Classifier
 from aegisvault.model.provider import ModelProvider
+from aegisvault.orchestration.agent import AegisAgent
 from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
@@ -198,3 +201,83 @@ def test_secure_delete_missing_file_is_no_op(
     pipeline._secure_delete(missing)
 
     assert not missing.exists()
+
+
+class _FixedMasterKeyProvider:
+    """Deterministic master key provider for end-to-end tests."""
+
+    def __init__(self, key: bytes) -> None:
+        self._key = key
+
+    def get_key(self) -> bytes:
+        return self._key
+
+    def exists(self) -> bool:
+        return True
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(sys.platform == "win32", reason="timing-sensitive on Windows")
+async def test_e2e_file_drop_triggers_full_pipeline(
+    tmp_path: Path,
+    classifier: Classifier,
+    vault_key: bytes,
+) -> None:
+    """Dropping a file into Inbox triggers the full pipeline automatically."""
+    config = AegisConfig()
+    config.paths.inbox = tmp_path / "Inbox"
+    config.paths.vault = tmp_path / "Vault"
+    config.paths.index = tmp_path / "Index"
+    config.paths.connections = tmp_path / "Config" / "connections.json"
+    config.paths.inbox.mkdir(parents=True, exist_ok=True)
+
+    task_store = TaskStore(config.paths.index / "tasks.db")
+    vault_manager = VaultManager(config.paths.vault, vault_key)
+    agent = AegisAgent(
+        config,
+        classifier=classifier,
+        task_store=task_store,
+        master_key_provider=_FixedMasterKeyProvider(vault_key),  # type: ignore[arg-type]
+        vault_manager=vault_manager,
+    )
+
+    captured_events: list[FileEvent] = []
+    original_on_file_event = agent.on_file_event
+
+    async def tracking_on_file_event(event: FileEvent) -> object:
+        captured_events.append(event)
+        return await original_on_file_event(event)
+
+    agent.on_file_event = tracking_on_file_event  # type: ignore[method-assign]
+
+    loop = asyncio.get_running_loop()
+    agent.start_monitoring(loop)
+    try:
+        source = config.paths.inbox / "secret.txt"
+        source.write_text("top secret quarterly report")
+
+        for _ in range(100):
+            if captured_events:
+                break
+            await asyncio.sleep(0.05)
+
+        assert len(captured_events) == 1
+        task_id = captured_events[0].event_id
+
+        for _ in range(100):
+            status = agent.get_status(task_id)
+            if status and status.state == TaskState.COMPLETED.name:
+                break
+            await asyncio.sleep(0.05)
+
+        status = agent.get_status(task_id)
+        assert status is not None
+        assert status.state == TaskState.COMPLETED.name
+        assert not source.exists()
+        assert any(config.paths.vault.rglob("*.log"))
+
+        results = await agent.search(SearchQuery(query="report"))
+        assert len(results) >= 1
+        assert results[0].category == "work"
+    finally:
+        agent.stop_monitoring()

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from aegisvault.api.schemas import ClassificationResult, SensitivityLevel
 from aegisvault.config import AegisConfig
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
@@ -478,3 +479,281 @@ def test_tray_vault_size_text_in_tb(qt_stubs: None, config: AegisConfig) -> None
     tray.config.paths.vault = FakeVault()  # type: ignore[assignment]
 
     assert tray._vault_size_text().endswith("TB")
+
+
+def _completed_task_with_classification(
+    store: TaskStore,
+    config: AegisConfig,
+    task_id: object,
+    classification: ClassificationResult,
+) -> None:
+    """Create a completed task with classification and vault metadata."""
+    vault_file = (
+        config.paths.vault / classification.category / f"{classification.disguise_name}.bin"
+    )
+    store.create(task_id, Path(f"/tmp/{classification.disguise_name}.txt"))
+    store.update_classification(task_id, classification)
+    store.update_vault_result(task_id, vault_file, b"salt", b"nonce")
+    store.update_state(task_id, TaskState.COMPLETED)
+
+
+def test_search_vault_dialog_lists_results(qt_stubs: None, config: AegisConfig) -> None:
+    """SearchVaultDialog displays completed Vault items."""
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    classification = ClassificationResult(
+        sensitivity=SensitivityLevel.HIGH,
+        category="finance",
+        tags=["tax", "2024"],
+        summary="annual tax report",
+        disguise_name="random_data",
+        disguise_extension="bin",
+    )
+    _completed_task_with_classification(store, config, uuid4(), classification)
+
+    dialog = SearchVaultDialog(store, config.paths.vault, b"x" * 32)
+
+    assert dialog.results_table._row_count == 1
+    assert dialog.results_table.item(0, 0).text() == "random_data"
+    assert dialog.results_table.item(0, 1).text() == "finance"
+    assert dialog.results_table.item(0, 2).text() == "high"
+    assert dialog.results_table.item(0, 3).text() == "annual tax report"
+    assert "Found 1 result" in dialog.status_label.text
+
+
+def test_search_vault_dialog_filters_by_keyword(qt_stubs: None, config: AegisConfig) -> None:
+    """Keyword filter narrows results to matching Vault items."""
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.MEDIUM,
+            category="work",
+            tags=["contract"],
+            summary="signed contract",
+            disguise_name="doc_alpha",
+            disguise_extension="bin",
+        ),
+    )
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="personal",
+            tags=["recipe"],
+            summary="pasta recipe",
+            disguise_name="doc_beta",
+            disguise_extension="bin",
+        ),
+    )
+
+    dialog = SearchVaultDialog(store, config.paths.vault, b"x" * 32)
+    assert dialog.results_table._row_count == 2
+
+    dialog.keyword_input.setText("contract")
+    dialog._run_search()
+
+    assert dialog.results_table._row_count == 1
+    assert dialog.results_table.item(0, 0).text() == "doc_alpha"
+
+
+def test_search_vault_dialog_filters_by_category_and_sensitivity(
+    qt_stubs: None, config: AegisConfig
+) -> None:
+    """Category and sensitivity filters work independently."""
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.HIGH,
+            category="finance",
+            tags=[],
+            summary="",
+            disguise_name="a",
+            disguise_extension="bin",
+        ),
+    )
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="finance",
+            tags=[],
+            summary="",
+            disguise_name="b",
+            disguise_extension="bin",
+        ),
+    )
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.HIGH,
+            category="health",
+            tags=[],
+            summary="",
+            disguise_name="c",
+            disguise_extension="bin",
+        ),
+    )
+
+    dialog = SearchVaultDialog(store, config.paths.vault, b"x" * 32)
+    dialog.category_combo.setCurrentText("finance")
+    dialog._run_search()
+    assert dialog.results_table._row_count == 2
+
+    dialog.sensitivity_combo.setCurrentText("high")
+    dialog._run_search()
+    assert dialog.results_table._row_count == 1
+    assert dialog.results_table.item(0, 0).text() == "a"
+
+
+def test_search_vault_dialog_filters_by_tags(qt_stubs: None, config: AegisConfig) -> None:
+    """Tag filter matches Vault items containing any requested tag."""
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="personal",
+            tags=["vacation", "photos"],
+            summary="",
+            disguise_name="trip",
+            disguise_extension="bin",
+        ),
+    )
+    _completed_task_with_classification(
+        store,
+        config,
+        uuid4(),
+        ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="personal",
+            tags=["receipt"],
+            summary="",
+            disguise_name="receipt",
+            disguise_extension="bin",
+        ),
+    )
+
+    dialog = SearchVaultDialog(store, config.paths.vault, b"x" * 32)
+    dialog.tags_input.setText("photos, missing")
+    dialog._run_search()
+
+    assert dialog.results_table._row_count == 1
+    assert dialog.results_table.item(0, 0).text() == "trip"
+
+
+def test_search_vault_dialog_opens_result(qt_stubs: None, config: AegisConfig) -> None:
+    """Double-clicking a result decrypts the Vault file via VaultManager."""
+    from pathlib import Path
+
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    vault_file = config.paths.vault / "finance" / "secret.bin"
+    classification = ClassificationResult(
+        sensitivity=SensitivityLevel.CRITICAL,
+        category="finance",
+        tags=[],
+        summary="",
+        disguise_name="secret",
+        disguise_extension="bin",
+    )
+    _completed_task_with_classification(store, config, uuid4(), classification)
+
+    decrypted_calls: list[dict[str, object]] = []
+
+    class FakeVaultManager:
+        def __init__(self, vault_path: Path, vault_key: bytes) -> None:
+            self.vault_path = vault_path
+            self.vault_key = vault_key
+
+        def decrypt(self, vault_path: Path, salt: bytes, destination: Path) -> None:
+            decrypted_calls.append(
+                {"vault_path": vault_path, "salt": salt, "destination": destination}
+            )
+
+    # Patch VaultManager inside the tray module before constructing the dialog.
+    import aegisvault.presentation.tray as tray_module
+
+    original_vault_manager = tray_module.VaultManager
+    tray_module.VaultManager = FakeVaultManager  # type: ignore[misc]
+    try:
+        dialog = SearchVaultDialog(store, config.paths.vault, b"k" * 32)
+        dialog.results_table.emit_cell_double_clicked(0, 0)
+    finally:
+        tray_module.VaultManager = original_vault_manager
+
+    assert len(decrypted_calls) == 1
+    assert decrypted_calls[0]["vault_path"] == vault_file
+    assert decrypted_calls[0]["salt"] == b"salt"
+    assert "Decrypted to:" in dialog.status_label.text
+
+
+def test_search_vault_dialog_decrypt_disabled_without_key(
+    qt_stubs: None, config: AegisConfig
+) -> None:
+    """Double-clicking without a configured vault key shows an error status."""
+    from aegisvault.presentation.tray import SearchVaultDialog
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    classification = ClassificationResult(
+        sensitivity=SensitivityLevel.LOW,
+        category="personal",
+        tags=[],
+        summary="",
+        disguise_name="unlocked",
+        disguise_extension="bin",
+    )
+    _completed_task_with_classification(store, config, uuid4(), classification)
+
+    dialog = SearchVaultDialog(store, config.paths.vault, None)
+    dialog.results_table.emit_cell_double_clicked(0, 0)
+
+    assert "no vault key configured" in dialog.status_label.text
+
+
+def test_tray_search_vault_opens_dialog(qt_stubs: None, config: AegisConfig) -> None:
+    """Clicking Search Vault opens the search dialog."""
+    from aegisvault.presentation import tray as tray_module
+    from aegisvault.presentation.tray import TrayApplication
+
+    opened: list[tuple[object, object, object]] = []
+
+    class FakeSearchDialog:
+        def __init__(self, task_store: object, vault_path: object, vault_key: object) -> None:
+            opened.append((task_store, vault_path, vault_key))
+
+        def exec(self) -> int:
+            return 1
+
+    tray_module.SearchVaultDialog = FakeSearchDialog  # type: ignore[misc]
+    try:
+        tray = TrayApplication(config=config, vault_key=b"x" * 32)
+        tray._search_vault()
+    finally:
+        del tray_module.SearchVaultDialog
+
+    assert len(opened) == 1
+    assert opened[0][0] is tray.task_store
+    assert opened[0][1] == config.paths.vault
+    assert opened[0][2] == b"x" * 32

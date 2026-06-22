@@ -1,20 +1,42 @@
 """System tray application with connection management entry."""
 
+import os
+import sqlite3
+import tempfile
 from pathlib import Path
+from typing import Any
 
-from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import (
-    QApplication,
-    QLabel,
-    QMenu,
-    QProgressBar,
-    QSystemTrayIcon,
-    QWidgetAction,
-)
+try:
+    from PyQt6.QtGui import QAction
+    from PyQt6.QtWidgets import (
+        QAbstractItemView,
+        QApplication,
+        QComboBox,
+        QDialog,
+        QFormLayout,
+        QHBoxLayout,
+        QHeaderView,
+        QLabel,
+        QLineEdit,
+        QMenu,
+        QProgressBar,
+        QPushButton,
+        QSystemTrayIcon,
+        QTableWidget,
+        QTableWidgetItem,
+        QVBoxLayout,
+        QWidgetAction,
+    )
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "PyQt6 is required for the AegisVault GUI. "
+        "Install the GUI extra: pip install 'aegisvault[gui]'"
+    ) from exc
 
 from aegisvault import __version__
-from aegisvault.api.schemas import TaskSummary
+from aegisvault.api.schemas import ClassificationResult, SensitivityLevel, TaskSummary
 from aegisvault.config import AegisConfig
+from aegisvault.execution.vault import VaultManager
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.manager import ConnectionManager
@@ -67,12 +89,14 @@ class TrayApplication:
         self,
         connections_path: Path | None = None,
         config: AegisConfig | None = None,
+        vault_key: bytes | None = None,
     ) -> None:
         existing = QApplication.instance()
         self.app = existing if isinstance(existing, QApplication) else QApplication([])
         self.tray = QSystemTrayIcon()
         self.menu = QMenu()
         self.config = config
+        self.vault_key = vault_key
         self.connections_path = connections_path or (
             config.paths.connections
             if config is not None
@@ -198,8 +222,14 @@ class TrayApplication:
         print(f"Open Vault: {vault}")  # noqa: T201
 
     def _search_vault(self) -> None:
-        """Placeholder for vault search UI."""
-        print("Search Vault...")  # noqa: T201
+        """Open the vault search dialog."""
+        print("Open Search Vault...")  # noqa: T201
+        if self.config is not None:
+            vault_path = self.config.paths.vault
+        else:
+            vault_path = Path.home() / "AegisVault" / "Vault"
+        dialog = SearchVaultDialog(self.task_store, vault_path, self.vault_key)
+        dialog.exec()
 
     def _open_dashboard(self) -> None:
         """Placeholder for dashboard UI."""
@@ -417,3 +447,195 @@ class TrayApplication:
         manager = ConnectionManager(self.connections_path)
         dialog = ConnectionManagerDialog(manager)
         dialog.exec()
+
+
+class SearchVaultDialog(QDialog):
+    """Search and open encrypted Vault files."""
+
+    def __init__(
+        self,
+        task_store: TaskStore | None,
+        vault_path: Path,
+        vault_key: bytes | None,
+    ) -> None:
+        super().__init__()
+        self.task_store = task_store
+        self.vault_path = vault_path
+        self.vault_key = vault_key
+        self.vault_manager = VaultManager(vault_path, vault_key) if vault_key is not None else None
+        self._results: list[dict[str, Any]] = []
+
+        self.setWindowTitle("🔍 Search Vault")
+        self.setMinimumSize(800, 500)
+
+        layout = QVBoxLayout(self)
+
+        filter_layout = QFormLayout()
+        self.keyword_input = QLineEdit()
+        self.keyword_input.setPlaceholderText("Search name, category, summary, tags...")
+        self.category_combo = QComboBox()
+        self.category_combo.setEditable(True)
+        self.category_combo.setCurrentText("(any)")
+        self.sensitivity_combo = QComboBox()
+        self.sensitivity_combo.addItem("(any)")
+        for level in SensitivityLevel:
+            self.sensitivity_combo.addItem(level.value)
+        self.tags_input = QLineEdit()
+        self.tags_input.setPlaceholderText("tag1, tag2, ...")
+
+        filter_layout.addRow("Keyword:", self.keyword_input)
+        filter_layout.addRow("Category:", self.category_combo)
+        filter_layout.addRow("Sensitivity:", self.sensitivity_combo)
+        filter_layout.addRow("Tags:", self.tags_input)
+        layout.addLayout(filter_layout)
+
+        button_layout = QHBoxLayout()
+        self.search_button = QPushButton("🔍 Search")
+        self.search_button.clicked.connect(self._run_search)
+        button_layout.addWidget(self.search_button)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(4)
+        self.results_table.setHorizontalHeaderLabels(
+            ["Disguise Name", "Category", "Sensitivity", "Summary"]
+        )
+        header = self.results_table.horizontalHeader()
+        assert header is not None
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.results_table.cellDoubleClicked.connect(self._open_result)
+        layout.addWidget(self.results_table)
+
+        self.status_label = QLabel("Ready")
+        layout.addWidget(self.status_label)
+
+        self._load_categories()
+        self._run_search()
+
+    def _load_categories(self) -> None:
+        """Populate the category filter with existing Vault categories."""
+        if self.task_store is None:
+            return
+        categories: set[str] = set()
+        with self.task_store._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                "SELECT classification FROM tasks WHERE state = ? AND vault_path IS NOT NULL",
+                (TaskState.COMPLETED.name,),
+            ).fetchall()
+        for row in rows:
+            classification_json = row["classification"]
+            if not classification_json:
+                continue
+            try:
+                classification = ClassificationResult.model_validate_json(classification_json)
+            except Exception:
+                continue
+            if classification.category:
+                categories.add(classification.category)
+        for category in sorted(categories):
+            self.category_combo.addItem(category)
+
+    def _fetch_results(self) -> list[dict[str, Any]]:
+        """Return Vault items matching the current filters."""
+        if self.task_store is None:
+            return []
+
+        keyword = self.keyword_input.text().strip().lower()
+        category = self.category_combo.currentText().strip()
+        sensitivity = self.sensitivity_combo.currentText().strip()
+        requested_tags = [
+            tag.strip() for tag in self.tags_input.text().strip().lower().split(",") if tag.strip()
+        ]
+
+        results: list[dict[str, Any]] = []
+        with self.task_store._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                """
+                SELECT task_id, vault_path, salt, classification
+                FROM tasks
+                WHERE state = ? AND vault_path IS NOT NULL
+                """,
+                (TaskState.COMPLETED.name,),
+            ).fetchall()
+
+        for row in rows:
+            classification_json = row["classification"]
+            if not classification_json:
+                continue
+            try:
+                classification = ClassificationResult.model_validate_json(classification_json)
+            except Exception:
+                continue
+
+            if category and category != "(any)" and classification.category != category:
+                continue
+            if (
+                sensitivity
+                and sensitivity != "(any)"
+                and classification.sensitivity.value != sensitivity
+            ):
+                continue
+            if requested_tags and not any(
+                requested in [tag.lower() for tag in classification.tags]
+                for requested in requested_tags
+            ):
+                continue
+            if keyword:
+                haystack = " ".join(
+                    [
+                        classification.disguise_name,
+                        classification.category,
+                        classification.summary,
+                        " ".join(classification.tags),
+                    ]
+                ).lower()
+                if keyword not in haystack:
+                    continue
+
+            results.append(
+                {
+                    "task_id": row["task_id"],
+                    "vault_path": Path(row["vault_path"]),
+                    "salt": row["salt"],
+                    "classification": classification,
+                }
+            )
+
+        return results
+
+    def _refresh_table(self) -> None:
+        """Render the current results into the results table."""
+        self.results_table.setRowCount(len(self._results))
+        for row, result in enumerate(self._results):
+            classification = result["classification"]
+            self.results_table.setItem(row, 0, QTableWidgetItem(classification.disguise_name))
+            self.results_table.setItem(row, 1, QTableWidgetItem(classification.category))
+            self.results_table.setItem(row, 2, QTableWidgetItem(classification.sensitivity.value))
+            self.results_table.setItem(row, 3, QTableWidgetItem(classification.summary))
+
+    def _run_search(self) -> None:
+        """Execute the search and refresh the results table."""
+        self._results = self._fetch_results()
+        self._refresh_table()
+        self.status_label.setText(f"Found {len(self._results)} result(s)")
+
+    def _open_result(self, row: int, _column: int) -> None:
+        """Decrypt the selected Vault file to a temporary location."""
+        if row < 0 or row >= len(self._results):
+            return
+
+        if self.vault_manager is None:
+            self.status_label.setText("Decrypt failed: no vault key configured")
+            return
+
+        result = self._results[row]
+        try:
+            fd, dest_path = tempfile.mkstemp(prefix="aegisvault_", suffix="_decrypted")
+            os.close(fd)
+            self.vault_manager.decrypt(result["vault_path"], result["salt"], Path(dest_path))
+            self.status_label.setText(f"Decrypted to: {dest_path}")
+        except Exception as exc:
+            self.status_label.setText(f"Decrypt failed: {exc}")

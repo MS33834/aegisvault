@@ -209,3 +209,101 @@ def test_init_migrates_legacy_schema(tmp_path: Path) -> None:
         conn.close()
     assert "created_at" in columns
     assert "updated_at" in columns
+
+
+@pytest.fixture
+def classification() -> ClassificationResult:
+    """Sample classification result for index tests."""
+    return ClassificationResult(
+        sensitivity="medium",
+        category="work",
+        tags=["report", "finance"],
+        summary="A quarterly finance report",
+        disguise_name="team_building_2023",
+        disguise_extension="log",
+    )
+
+
+def test_index_classification_and_search(
+    task_store: TaskStore, classification: ClassificationResult
+) -> None:
+    """Indexed classifications can be searched by keywords."""
+    task_id = uuid4()
+    vault_path = Path("/vault/work/report.log")
+
+    task_store.index_classification(task_id, classification, vault_path)
+
+    results = task_store.search("finance")
+    assert len(results) >= 1
+    assert results[0].vault_path == vault_path
+    assert results[0].category == "work"
+    assert "report" in results[0].summary
+
+
+def test_search_returns_empty_for_no_match(
+    task_store: TaskStore, classification: ClassificationResult
+) -> None:
+    """Search returns an empty list when nothing matches."""
+    task_id = uuid4()
+    task_store.index_classification(task_id, classification, Path("/vault/work/report.log"))
+
+    assert task_store.search("nonexistent") == []
+
+
+def test_search_limits_results(task_store: TaskStore, classification: ClassificationResult) -> None:
+    """Search respects the top_k limit."""
+    for i in range(5):
+        task_id = uuid4()
+        task_store.index_classification(
+            task_id,
+            classification.model_copy(update={"summary": f"Report number {i}"}),
+            Path(f"/vault/work/report{i}.log"),
+        )
+
+    results = task_store.search("Report", top_k=2)
+    assert len(results) == 2
+
+
+def test_search_empty_query_returns_empty(task_store: TaskStore) -> None:
+    """An empty query returns no results."""
+    assert task_store.search("") == []
+
+
+def test_fallback_index_and_search(tmp_path: Path, classification: ClassificationResult) -> None:
+    """When FTS5 is unavailable the store falls back to a plain table."""
+    db_path = tmp_path / "fallback.db"
+    store = TaskStore(db_path)
+    # Simulate an SQLite build without FTS5.
+    store._has_fts5 = lambda _conn: False  # type: ignore[method-assign]
+    with store._connect() as conn:
+        store._init_fts(conn)
+
+    vault_path = Path("/vault/work/report.log")
+    store.index_classification(uuid4(), classification, vault_path)
+
+    results = store.search("finance")
+    assert len(results) >= 1
+    assert results[0].vault_path == vault_path
+
+
+def test_has_fts5_handles_database_error(tmp_path: Path) -> None:
+    """_has_fts5 returns False when the pragma query fails."""
+    db_path = tmp_path / "fts_check.db"
+    store = TaskStore(db_path)
+
+    class FailingConnection:
+        def execute(self, _sql: str) -> None:
+            raise sqlite3.Error("boom")
+
+    assert store._has_fts5(FailingConnection()) is False
+
+
+def test_fallback_search_empty_query_returns_empty(tmp_path: Path) -> None:
+    """Fallback search returns empty for an empty query."""
+    db_path = tmp_path / "fallback_empty.db"
+    store = TaskStore(db_path)
+    store._has_fts5 = lambda _conn: False  # type: ignore[method-assign]
+    with store._connect() as conn:
+        store._init_fts(conn)
+
+    assert store.search("") == []

@@ -26,7 +26,7 @@ jobs:
           cache: poetry
 
       - name: Install dependencies
-        run: poetry install --with dev --no-interaction
+        run: poetry install --with dev,gui --no-interaction
 
       - name: Lint
         run: poetry run ruff check .
@@ -71,4 +71,51 @@ jobs:
         run: poetry install --with dev --no-interaction
 
       - name: Test
-        run: poetry run pytest tests/ -q -m "not integration and not gui and not slow"
+        run: poetry run pytest tests/ -q
+        env:
+          # Ensure headless presentation tests do not try to open a display.
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload coverage HTML report
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          if-no-files-found: ignore
+
+  build:
+    name: Build packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev,gui --no-interaction
+
+      - name: Validate lock file
+        run: poetry lock --check
+
+      - name: Build wheel and sdist
+        run: poetry build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

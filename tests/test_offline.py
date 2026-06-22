@@ -1,6 +1,11 @@
 """Tests for offline/network isolation assertions."""
 
+import ctypes
+import socket
+import struct
 import sys
+import types
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -14,6 +19,101 @@ from aegisvault.security.offline import (
     get_outbound_connections,
     has_outbound_connection,
 )
+
+_AF_INET = 2
+_AF_INET6 = 23
+
+
+def _ipv4_dword(ip: str) -> int:
+    """Little-endian DWORD representation used by MIB_TCPROW_OWNER_PID."""
+    return struct.unpack("<I", socket.inet_aton(ip))[0]
+
+
+def _build_v4_table(
+    rows: list[tuple[int, str, int, str, int, int]],
+) -> bytes:
+    """Build raw bytes for a MIB_TCPTABLE_OWNER_PID structure."""
+    data = struct.pack("<I", len(rows))
+    for state, local_ip, local_port, remote_ip, remote_port, pid in rows:
+        data += struct.pack(
+            "<IIIIII",
+            state,
+            _ipv4_dword(local_ip),
+            socket.htons(local_port),
+            _ipv4_dword(remote_ip),
+            socket.htons(remote_port),
+            pid,
+        )
+    return data
+
+
+def _build_v6_table(
+    rows: list[tuple[int, str, int, str, int, int]],
+) -> bytes:
+    """Build raw bytes for a MIB_TCP6TABLE_OWNER_PID structure."""
+    data = struct.pack("<I", len(rows))
+    for state, local_ip, local_port, remote_ip, remote_port, pid in rows:
+        data += socket.inet_pton(socket.AF_INET6, local_ip)
+        data += struct.pack("<I", 0)  # LocalScopeId
+        data += struct.pack("<I", socket.htons(local_port))
+        data += socket.inet_pton(socket.AF_INET6, remote_ip)
+        data += struct.pack("<I", 0)  # RemoteScopeId
+        data += struct.pack("<I", socket.htons(remote_port))
+        data += struct.pack("<II", state, pid)
+    return data
+
+
+def _make_fake_get_extended_tcp_table(
+    table_data: dict[int, bytes],
+) -> Callable[..., int]:
+    """Return a ctypes-compatible GetExtendedTcpTable mock."""
+    dword = ctypes.c_uint32
+    ulong = ctypes.c_uint32
+    lpvoid = ctypes.c_void_p
+
+    def _impl(
+        table: object,
+        size_ptr: ctypes.POINTER(ctypes.c_uint32),
+        _order: int,
+        af: int,
+        _table_class: int,
+        _reserved: int,
+    ) -> int:
+        if size_ptr.contents.value == 0:
+            size_ptr.contents.value = max(4, len(table_data.get(af, b"")))
+            return 122
+        data = table_data.get(af, b"")
+        if data:
+            ctypes.memmove(table, data, len(data))
+        return 0
+
+    return ctypes.CFUNCTYPE(dword, lpvoid, ctypes.POINTER(dword), dword, ulong, dword, ulong)(_impl)
+
+
+def _patch_windows_tcp_api(
+    monkeypatch: pytest.MonkeyPatch,
+    table_data: dict[int, bytes],
+) -> None:
+    """Replace ctypes/windll in offline.py so _parse_windows_tcp runs on Linux."""
+    fake_ctypes = types.ModuleType("ctypes")
+    for name in dir(ctypes):
+        if not name.startswith("__"):
+            setattr(fake_ctypes, name, getattr(ctypes, name))
+
+    fake_wintypes = types.ModuleType("wintypes")
+    fake_wintypes.DWORD = ctypes.c_uint32
+    fake_wintypes.ULONG = ctypes.c_uint32
+    fake_wintypes.LPVOID = ctypes.c_void_p
+    fake_wintypes.BYTE = ctypes.c_ubyte
+    fake_ctypes.wintypes = fake_wintypes
+
+    windll = types.SimpleNamespace()
+    windll.iphlpapi = types.SimpleNamespace()
+    windll.iphlpapi.GetExtendedTcpTable = _make_fake_get_extended_tcp_table(table_data)
+    fake_ctypes.windll = windll
+
+    monkeypatch.setattr(offline_module, "ctypes", fake_ctypes)
+    monkeypatch.setattr(offline_module, "sys", types.SimpleNamespace(platform="win32"))
 
 
 @pytest.mark.parametrize(
@@ -152,14 +252,115 @@ def test_get_outbound_connections_unsupported_platform(
     assert has_outbound_connection(pid=12345) is False
 
 
-def test_parse_windows_tcp_returns_empty() -> None:
-    """The Windows helper is currently a placeholder."""
+def test_parse_windows_tcp_returns_empty_on_non_windows() -> None:
+    """On non-Windows platforms the helper returns an empty list gracefully."""
     assert _parse_windows_tcp(12345) == []
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows placeholder branch")
+def test_parse_windows_tcp_ipv4_on_linux_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux can exercise the IPv4 Windows code path with a mocked API."""
+    table_data = {
+        _AF_INET: _build_v4_table([(1, "127.0.0.1", 12345, "8.8.8.8", 443, 12345)]),
+    }
+    _patch_windows_tcp_api(monkeypatch, table_data)
+
+    assert _parse_windows_tcp(12345) == [("127.0.0.1", 12345, "8.8.8.8", 443)]
+
+
+def test_parse_windows_tcp_ipv6_on_linux_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux can exercise the IPv6 Windows code path with a mocked API."""
+    table_data = {
+        _AF_INET6: _build_v6_table([(1, "::1", 12345, "2001:4860:4860::8888", 443, 12345)]),
+    }
+    _patch_windows_tcp_api(monkeypatch, table_data)
+
+    assert _parse_windows_tcp(12345) == [("::1", 12345, "2001:4860:4860::8888", 443)]
+
+
+def test_parse_windows_tcp_filters_by_pid_and_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only rows matching the target PID and active states are returned."""
+    table_data = {
+        _AF_INET: _build_v4_table(
+            [
+                (1, "127.0.0.1", 1111, "8.8.8.8", 443, 12345),  # match
+                (1, "127.0.0.1", 2222, "1.1.1.1", 443, 99999),  # wrong pid
+                (2, "127.0.0.1", 3333, "9.9.9.9", 443, 12345),  # wrong state
+                (8, "127.0.0.1", 4444, "1.0.0.1", 443, 12345),  # match (CLOSE_WAIT)
+            ]
+        ),
+    }
+    _patch_windows_tcp_api(monkeypatch, table_data)
+
+    conns = _parse_windows_tcp(12345)
+    assert conns == [
+        ("127.0.0.1", 1111, "8.8.8.8", 443),
+        ("127.0.0.1", 4444, "1.0.0.1", 443),
+    ]
+
+
+def test_parse_windows_tcp_ignores_empty_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty table with zero entries returns an empty list."""
+    table_data = {_AF_INET: struct.pack("<I", 0)}
+    _patch_windows_tcp_api(monkeypatch, table_data)
+
+    assert _parse_windows_tcp(12345) == []
+
+
+def test_parse_windows_tcp_graceful_on_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-success second GetExtendedTcpTable call returns [] instead of crashing."""
+    fake_ctypes = types.ModuleType("ctypes")
+    for name in dir(ctypes):
+        if not name.startswith("__"):
+            setattr(fake_ctypes, name, getattr(ctypes, name))
+
+    fake_wintypes = types.ModuleType("wintypes")
+    fake_wintypes.DWORD = ctypes.c_uint32
+    fake_wintypes.ULONG = ctypes.c_uint32
+    fake_wintypes.LPVOID = ctypes.c_void_p
+    fake_wintypes.BYTE = ctypes.c_ubyte
+    fake_ctypes.wintypes = fake_wintypes
+
+    def _fail_impl(
+        _table: object,
+        size_ptr: ctypes.POINTER(ctypes.c_uint32),
+        _order: int,
+        _af: int,
+        _table_class: int,
+        _reserved: int,
+    ) -> int:
+        if size_ptr.contents.value == 0:
+            size_ptr.contents.value = 1024
+            return 122
+        return 1  # arbitrary non-zero failure
+
+    windll = types.SimpleNamespace()
+    windll.iphlpapi = types.SimpleNamespace()
+    windll.iphlpapi.GetExtendedTcpTable = ctypes.CFUNCTYPE(
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+    )(_fail_impl)
+    fake_ctypes.windll = windll
+
+    monkeypatch.setattr(offline_module, "ctypes", fake_ctypes)
+    monkeypatch.setattr(offline_module, "sys", types.SimpleNamespace(platform="win32"))
+
+    assert _parse_windows_tcp(12345) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows integration branch")
 def test_has_outbound_connection_windows() -> None:
-    """Windows branch returns False until implemented."""
+    """Windows branch returns False when no outbound connection is present."""
     assert not has_outbound_connection(pid=12345)
 
 

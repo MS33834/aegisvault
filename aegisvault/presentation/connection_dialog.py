@@ -2,25 +2,31 @@
 
 from typing import Any
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QAbstractItemView,
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import (
+        QAbstractItemView,
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QFormLayout,
+        QHBoxLayout,
+        QHeaderView,
+        QLabel,
+        QLineEdit,
+        QMessageBox,
+        QPushButton,
+        QTableWidget,
+        QTableWidgetItem,
+        QVBoxLayout,
+        QWidget,
+    )
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "PyQt6 is required for the AegisVault GUI. "
+        "Install the GUI extra: pip install 'aegisvault[gui]'"
+    ) from exc
 
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import AuthMethod, Connection, PlatformType

@@ -50,7 +50,9 @@ def build_block_rule_command(process_path: Path) -> str:
         f"-Direction Outbound "
         f"-Program {_quote_ps_string(path)} "
         f"-Action Block "
-        f"-Profile Any"
+        f"-Profile Any "
+        f"-Enabled True "
+        f"-PolicyStore ActiveStore"
     )
 
 

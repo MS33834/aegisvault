@@ -904,7 +904,7 @@ version = "6.11.0"
 description = "Python bindings for the Qt cross platform application toolkit"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "gui"]
 files = [
     {file = "pyqt6-6.11.0-cp310-abi3-macosx_10_14_universal2.whl", hash = "sha256:f7100bc7f72b12581ec479a733f4ad11b8002668e6786e8a445ab6f4d1c743d4"},
     {file = "pyqt6-6.11.0-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:8555277989fa7d114cb3c3443fd261d566909f7268ceedd41d93a5f02d37ec05"},
@@ -913,6 +913,7 @@ files = [
     {file = "pyqt6-6.11.0-cp310-abi3-win_arm64.whl", hash = "sha256:b6324e3501b19b4292c7a55b1f22e82d3e80e519e383ce4fe79b4a754c6f0288"},
     {file = "pyqt6-6.11.0.tar.gz", hash = "sha256:45dd60aa69976de1918b5ced6b4e7b6a25abd2a919ecef5fd5826ecc76718889"},
 ]
+markers = {main = "extra == \"gui\""}
 
 [package.dependencies]
 PyQt6-Qt6 = ">=6.11.0,<6.12.0"
@@ -924,7 +925,7 @@ version = "6.11.1"
 description = "The subset of a Qt installation needed by PyQt6."
 optional = false
 python-versions = "*"
-groups = ["main"]
+groups = ["main", "gui"]
 files = [
     {file = "pyqt6_qt6-6.11.1-py3-none-macosx_10_14_x86_64.whl", hash = "sha256:694486f18b7ab9b1edcdb50e0c9f5cb726e096107da90ae7b0e810f18e2002b3"},
     {file = "pyqt6_qt6-6.11.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:fd05b31a3c83111b6eb82bb472ccfe531ef823f70d085b82fd1edc5ad2553c54"},
@@ -933,6 +934,7 @@ files = [
     {file = "pyqt6_qt6-6.11.1-py3-none-win_amd64.whl", hash = "sha256:7486c80512e823f2d3087e67f854f0556b345f4368040a853c8dc4d30fd3fe69"},
     {file = "pyqt6_qt6-6.11.1-py3-none-win_arm64.whl", hash = "sha256:120efbedf833e5bbbc3d64ebdb139b44ff34e60f34410c7b1c2c26d230380bda"},
 ]
+markers = {main = "extra == \"gui\""}
 
 [[package]]
 name = "pyqt6-sip"
@@ -940,7 +942,7 @@ version = "13.11.1"
 description = "The sip module support for PyQt6"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "gui"]
 files = [
     {file = "pyqt6_sip-13.11.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:a2456a8a68de43f400ffd13f7f8728713434ded374e45fa7754afb9e087b2421"},
     {file = "pyqt6_sip-13.11.1-cp310-cp310-manylinux1_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:7a1b08421967e68a821d3ea97fcdc8413671aec817a0dc46b844ab4bb2ebab66"},
@@ -968,6 +970,7 @@ files = [
     {file = "pyqt6_sip-13.11.1-cp314-cp314-win_arm64.whl", hash = "sha256:42b62530a9b6a9c6e29c2941b8ab78258652da0aeae4eb1fc9a0631d19a7a7b2"},
     {file = "pyqt6_sip-13.11.1.tar.gz", hash = "sha256:869c5b48afe38e55b1ee0dd72182b0886e968cc509b98023ff50010b013ce1be"},
 ]
+markers = {main = "extra == \"gui\""}
 
 [[package]]
 name = "pytest"
@@ -1158,7 +1161,10 @@ files = [
 [package.extras]
 watchmedo = ["PyYAML (>=3.10)"]
 
+[extras]
+gui = ["pyqt6"]
+
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.11"
-content-hash = "2162f055f80912c398ba2baae5507e2c334edf1d6cccf796b958473031692e12"
+python-versions = ">=3.11"
+content-hash = "674844bd0a8eca2b8c4e9425a1906137d1f880d6e491188f2f1d257182dab2d4"

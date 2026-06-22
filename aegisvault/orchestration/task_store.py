@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from aegisvault.api.schemas import ClassificationResult, TaskStatus, TaskSummary
+from aegisvault.api.schemas import ClassificationResult, SearchResult, TaskStatus, TaskSummary
 from aegisvault.orchestration.state_machine import TaskState
 
 
@@ -61,7 +61,49 @@ class TaskStore:
                 conn.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT DEFAULT ''")
             if "updated_at" not in columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT ''")
+            self._init_fts(conn)
             conn.commit()
+
+    def _init_fts(self, conn: sqlite3.Connection) -> None:
+        """Create the SQLite FTS index for vault metadata if supported."""
+        self._fts5_enabled = self._has_fts5(conn)
+        if self._fts5_enabled:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS vault_fts USING fts5(
+                    task_id UNINDEXED,
+                    vault_path UNINDEXED,
+                    category,
+                    summary,
+                    tags,
+                    disguise_name,
+                    created_at UNINDEXED
+                )
+                """
+            )
+        else:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vault_fts_fallback (
+                    task_id TEXT PRIMARY KEY,
+                    vault_path TEXT,
+                    category TEXT,
+                    summary TEXT,
+                    tags TEXT,
+                    disguise_name TEXT,
+                    created_at TEXT
+                )
+                """
+            )
+
+    @staticmethod
+    def _has_fts5(conn: sqlite3.Connection) -> bool:
+        """Return True when the SQLite build supports FTS5."""
+        try:
+            rows = conn.execute("PRAGMA compile_options").fetchall()
+        except sqlite3.Error:
+            return False
+        return any(str(row[0]) == "ENABLE_FTS5" for row in rows)
 
     @staticmethod
     def _now() -> str:
@@ -120,6 +162,130 @@ class TaskStore:
                 (str(vault_path), salt, nonce, str(task_id)),
             )
             conn.commit()
+
+    def index_classification(
+        self,
+        task_id: UUID,
+        classification: ClassificationResult,
+        vault_path: Path,
+        created_at: str | None = None,
+    ) -> None:
+        """Index classification metadata for full-text search."""
+        now = created_at or self._now()
+        tags = " ".join(classification.tags)
+        with self._connect() as conn:
+            if self._fts5_enabled:
+                conn.execute(
+                    "DELETE FROM vault_fts WHERE task_id = ?",
+                    (str(task_id),),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO vault_fts
+                        (task_id, vault_path, category, summary, tags, disguise_name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(task_id),
+                        str(vault_path),
+                        classification.category,
+                        classification.summary,
+                        tags,
+                        classification.disguise_name,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO vault_fts_fallback
+                        (task_id, vault_path, category, summary, tags, disguise_name, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(task_id),
+                        str(vault_path),
+                        classification.category,
+                        classification.summary,
+                        tags,
+                        classification.disguise_name,
+                        now,
+                    ),
+                )
+            conn.commit()
+
+    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+        """Search indexed vault metadata for the given keywords."""
+        if self._fts5_enabled:
+            return self._search_fts(query, top_k)
+        return self._search_fallback(query, top_k)
+
+    def _search_fts(self, query: str, top_k: int) -> list[SearchResult]:
+        """Execute an FTS5 search with prefix matching on each token."""
+        tokens = [token for token in query.split() if token]
+        if not tokens:
+            return []
+        # Quote each token and enable prefix matching.
+        quote = '"'
+        escaped_quote = '""'
+        match_expr = " ".join(
+            f"{quote}{token.replace(quote, escaped_quote)}{quote}*" for token in tokens
+        )
+        with self._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                """
+                SELECT vault_path, category, summary, rank
+                FROM vault_fts
+                WHERE vault_fts MATCH ?
+                ORDER BY rank DESC
+                LIMIT ?
+                """,
+                (match_expr, top_k),
+            ).fetchall()
+        return [
+            SearchResult(
+                vault_path=Path(row["vault_path"]),
+                category=row["category"],
+                summary=row["summary"],
+                score=float(row["rank"]),
+            )
+            for row in rows
+        ]
+
+    def _search_fallback(self, query: str, top_k: int) -> list[SearchResult]:
+        """Fallback LIKE-based search when FTS5 is unavailable."""
+        tokens = [token.lower() for token in query.split() if token]
+        if not tokens:
+            return []
+        conditions = " OR ".join(
+            "(LOWER(category) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(tags) LIKE ?"
+            " OR LOWER(disguise_name) LIKE ?)"
+            for _ in tokens
+        )
+        params: list[str] = []
+        for token in tokens:
+            like = f"%{token}%"
+            params.extend([like, like, like, like])
+        params.append(str(top_k))
+        with self._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT vault_path, category, summary
+                FROM vault_fts_fallback
+                WHERE {conditions}
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [
+            SearchResult(
+                vault_path=Path(row["vault_path"]),
+                category=row["category"],
+                summary=row["summary"],
+                score=1.0,
+            )
+            for row in rows
+        ]
 
     def get(self, task_id: UUID) -> dict[str, Any] | None:
         """Fetch task record as a dictionary."""
