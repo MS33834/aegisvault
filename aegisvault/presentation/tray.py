@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from PyQt6.QtGui import QAction
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtGui import QAction, QCloseEvent
     from PyQt6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -556,6 +557,7 @@ class SearchVaultDialog(QDialog):
         self.vault_key = vault_key
         self.vault_manager = VaultManager(vault_path, vault_key) if vault_key is not None else None
         self._results: list[dict[str, Any]] = []
+        self._temp_files: list[Path] = []
 
         self.setWindowTitle("🔍 Search Vault")
         self.setMinimumSize(800, 500)
@@ -728,6 +730,16 @@ class SearchVaultDialog(QDialog):
             fd, dest_path = tempfile.mkstemp(prefix="aegisvault_", suffix="_decrypted")
             os.close(fd)
             self.vault_manager.decrypt(result["vault_path"], result["salt"], Path(dest_path))
+            dest = Path(dest_path)
+            self._temp_files.append(dest)
+            QTimer.singleShot(300_000, lambda p=dest: p.unlink(missing_ok=True))
             self.status_label.setText(f"Decrypted to: {dest_path}")
         except Exception as exc:
             self.status_label.setText(f"Decrypt failed: {exc}")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Clean up any remaining decrypted temp files."""
+        for path in self._temp_files:
+            path.unlink(missing_ok=True)
+        self._temp_files.clear()
+        super().closeEvent(event)

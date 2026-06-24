@@ -733,6 +733,32 @@ class FakeQt:
         CustomContextMenu = 3
 
 
+class FakeQTimer:
+    """Stub QTimer for headless tests."""
+
+    fired_callbacks: list[object] = []
+
+    @staticmethod
+    def singleShot(msec: int, callback: object) -> None:
+        FakeQTimer.fired_callbacks.append(callback)
+
+
+class FakeQCloseEvent:
+    """Stub QCloseEvent for headless tests."""
+
+    def __init__(self) -> None:
+        self._accepted = False
+
+    def accept(self) -> None:
+        self._accepted = True
+
+    def ignore(self) -> None:
+        self._accepted = False
+
+    def isAccepted(self) -> bool:
+        return self._accepted
+
+
 def install_presentation_stubs() -> dict[str, Any]:
     """Install fake PyQt6 modules and return the saved originals."""
     import sys
@@ -750,12 +776,14 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_core = types.ModuleType("PyQt6.QtCore")
 
     fake_qt_gui.QAction = FakeAction
+    fake_qt_gui.QCloseEvent = FakeQCloseEvent
     fake_qt_gui.QDesktopServices = FakeDesktopServices
     fake_qt_gui.QIcon = FakeIcon
     fake_qt_gui.QPixmap = FakePixmap
 
     fake_qt_core.QSize = lambda w, h: type("Size", (), {"width": lambda: w, "height": lambda: h})()
     fake_qt_core.Qt = FakeQt
+    fake_qt_core.QTimer = FakeQTimer
     fake_qt_core.QUrl = FakeUrl
 
     fake_qt_widgets.QAbstractItemView = FakeAbstractItemView

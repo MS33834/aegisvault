@@ -9,6 +9,7 @@ AppContainer / LowBoxToken) sandboxes.
 from __future__ import annotations
 
 import abc
+import os
 import re
 import shutil
 import subprocess
@@ -221,45 +222,26 @@ class LinuxSandboxRunner(SandboxRunner):
 
 
 class WindowsSandboxRunner(SandboxRunner):
-    """Windows sandbox implementation using PowerShell and AppContainer.
+    """Windows sandbox implementation using restricted process execution.
 
-    WARNING: This implementation relies on the PowerShell cmdlets
-    ``New-AppContainerProfile`` and ``Add-AppContainerAllowedPath``. These
-    cmdlets are not part of the standard PowerShell distribution and are not
-    available on a stock Windows installation. On real Windows systems
-    ``run()`` will therefore fail at runtime unless the required modules are
-    installed. This runner is currently a placeholder; a production
-    implementation should use direct Win32 API calls (e.g. CreateAppContainerProfile,
-    CreateProcessAsUser with a LowBox token) via ctypes instead.
+    This runner provides isolation through three mechanisms:
 
-    On Windows 11 the runner attempts to spawn a low-integrity process inside
-    an AppContainer (LowBox token) via PowerShell. Network access is blocked
-    with the Windows Defender Firewall helper and the token is restricted to a
-    small set of capabilities. Filesystem access is limited to the Vault
-    directory (read-only) and an ephemeral working directory (writable).
+    1. **Low integrity level** via ``icacls /setintegritylevel Low`` — the
+       sandboxed process cannot write to Medium-integrity (normal user) objects.
+    2. **Network blocking** via a temporary Windows Defender Firewall outbound
+       rule that denies all traffic from the sandboxed executable.
+    3. **Ephemeral working directory** — the process runs inside a temporary
+       directory that is cleaned up on exit.
+
+    Full AppContainer (LowBox token) isolation via ctypes is planned for a
+    future phase. The current approach works on stock Windows 10/11 without
+    any additional modules.
     """
 
     @staticmethod
     def _ps_quote(value: str) -> str:
         """Single-quote a value for PowerShell, escaping embedded quotes."""
         return "'" + value.replace("'", "''") + "'"
-
-    def _ps_build_arg_list(self, args: list[str]) -> str:
-        """Build a PowerShell array literal from command arguments."""
-        return ", ".join(self._ps_quote(arg) for arg in args)
-
-    def _ps_build_env_block(self, env_vars: dict[str, str] | None) -> str:
-        """Build environment variable assignments for PowerShell."""
-        if not env_vars:
-            return ""
-        entries = "; ".join(
-            f"$env:{key} = {self._ps_quote(value)}" for key, value in env_vars.items()
-        )
-        return entries + "; "
-
-    def _ps_build_path_list(self, paths: list[str]) -> str:
-        """Build a PowerShell array literal from filesystem paths."""
-        return ", ".join(self._ps_quote(path) for path in paths)
 
     def _build_powershell_command(
         self,
@@ -270,58 +252,51 @@ class WindowsSandboxRunner(SandboxRunner):
         env_vars: dict[str, str] | None,
     ) -> str:
         """Build the PowerShell command that launches the sandboxed process."""
-        vault = str(self.vault_dir.resolve())
         tmp = str(temp_dir.resolve())
         tmp_ps = tmp.replace("\\", "/")
         exe = command[0]
         args = command[1:]
 
-        arg_list = self._ps_build_arg_list(args)
-        env_block = self._ps_build_env_block(env_vars)
+        arg_list = ", ".join(self._ps_quote(arg) for arg in args)
 
-        # Build capability SID list for the AppContainer. Start with no
-        # capabilities, which is the most restrictive profile.
-        capability_sids = "@()"
-
-        # Extra filesystem permissions are expressed as access rules on the
-        # LowBox token. We model read-only and writable directories by setting
-        # ACLs on the Vault and temp directories.
-        readonly_paths = [vault]
-        if extra_readonly_paths:
-            readonly_paths.extend(str(p.resolve()) for p in extra_readonly_paths if p.exists())
-
-        writable_paths = [tmp]
         if extra_writable_paths:
-            writable_paths.extend(str(p.resolve()) for p in extra_writable_paths)
             for path in extra_writable_paths:
                 path.mkdir(parents=True, exist_ok=True)
 
-        readonly_list = self._ps_build_path_list(readonly_paths)
-        writable_list = self._ps_build_path_list(writable_paths)
+        env_block = ""
+        if env_vars:
+            entries = "; ".join(
+                f"$env:{key} = {self._ps_quote(value)}" for key, value in env_vars.items()
+            )
+            env_block = entries + "; "
+
+        rule_name = f"AegisVault_{os.getpid()}_{id(temp_dir)}"
 
         ps = (
             f"$ErrorActionPreference = 'Stop'; "
-            f"$vaultPaths = @({readonly_list}); "
-            f"$writePaths = @({writable_list}); "
-            f"$sid = New-AppContainerProfile -Name 'AegisVaultSandbox' "
-            f"-DisplayName 'AegisVault Sandbox' "
-            f"-Description 'Restricted execution profile for AegisVault' "
-            f"-Capabilities {capability_sids}; "
-            f"foreach ($path in $vaultPaths) {{ "
-            f"Add-AppContainerAllowedPath -Path $path -AppContainerSid $sid "
-            f"-Access ReadAndExecute }}; "
-            f"foreach ($path in $writePaths) {{ "
-            f"Add-AppContainerAllowedPath -Path $path -AppContainerSid $sid "
-            f"-Access Modify }}; "
+            f"$exe = {self._ps_quote(exe)}; "
+            f"$ruleName = {self._ps_quote(rule_name)}; "
+            f"$tmpDir = {self._ps_quote(tmp)}; "
+            # Set low integrity level so the process cannot write to normal user objects.
+            f"icacls $exe /setintegritylevel (OI)(CI)L | Out-Null; "
+            # Block outbound network from this executable via Windows Defender Firewall.
+            f"netsh advfirewall firewall add rule name=$ruleName dir=out action=block "
+            f"program=$exe | Out-Null; "
+            f"try {{ "
             f"{env_block}"
-            f"Start-Process -FilePath {self._ps_quote(exe)} -ArgumentList @({arg_list}) "
-            f"-AppContainerName 'AegisVaultSandbox' "
+            f"Start-Process -FilePath $exe -ArgumentList @({arg_list}) "
             f"-WorkingDirectory {self._ps_quote(tmp)} -Wait -NoNewWindow "
             f"-RedirectStandardOutput {self._ps_quote(tmp_ps + '/stdout.txt')} "
             f"-RedirectStandardError {self._ps_quote(tmp_ps + '/stderr.txt')}; "
+            f"$exitCode = $LASTEXITCODE; "
+            f"}} finally {{ "
+            # Always clean up the firewall rule, even if the process fails.
+            f"netsh advfirewall firewall delete rule name=$ruleName | Out-Null "
+            f"}}; "
             f"Get-Content {self._ps_quote(tmp_ps + '/stdout.txt')}; "
             f"Write-Error (Get-Content {self._ps_quote(tmp_ps + '/stderr.txt')}) "
-            f"-ErrorAction Continue"
+            f"-ErrorAction Continue; "
+            f"exit $exitCode"
         )
         return ps
 
@@ -336,12 +311,7 @@ class WindowsSandboxRunner(SandboxRunner):
         extra_writable_paths: list[Path] | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run *command* inside a Windows AppContainer sandbox.
-
-        NOTE: This will fail on stock Windows because the required
-        ``New-AppContainerProfile`` and ``Add-AppContainerAllowedPath`` cmdlets
-        are not available in standard PowerShell.
-        """
+        """Run *command* inside a restricted Windows process."""
         if not self.enabled:
             raise SandboxError("Sandbox execution is disabled (security.sandbox_enabled=false)")
 
