@@ -440,6 +440,16 @@ class FakeHeaderView:
         pass
 
 
+class FakeStyle:
+    """Stub QStyle for headless tests."""
+
+    class StandardPixmap:
+        SP_FileIcon = 0
+        SP_DirIcon = 1
+        SP_ComputerIcon = 2
+        SP_DriveHDIcon = 3
+
+
 class FakeAbstractItemView:
     """Stub QAbstractItemView for headless tests."""
 
@@ -549,6 +559,89 @@ class FakeTreeWidget:
             callback(current, self._current_item)
 
 
+class FakeStackedWidget:
+    """Stub QStackedWidget for headless tests."""
+
+    def __init__(self, _parent: object | None = None) -> None:
+        self._widgets: list[object] = []
+        self._current_index = 0
+
+    def addWidget(self, widget: object) -> int:
+        self._widgets.append(widget)
+        return len(self._widgets) - 1
+
+    def setCurrentIndex(self, index: int) -> None:
+        self._current_index = index
+
+    def currentIndex(self) -> int:
+        return self._current_index
+
+
+class FakeListWidgetItem:
+    """Stub QListWidgetItem for headless tests."""
+
+    def __init__(self, text: str = "", _parent: object | None = None) -> None:
+        self._text = text
+        self._icon: object | None = None
+        self._size_hint: tuple[int, int] | None = None
+
+    def setIcon(self, icon: object) -> None:
+        self._icon = icon
+
+    def setSizeHint(self, size: object) -> None:
+        self._size_hint = (size.width(), size.height())
+
+
+class FakeListWidget:
+    """Stub QListWidget for headless tests."""
+
+    def __init__(self, _parent: object | None = None) -> None:
+        self._items: list[FakeListWidgetItem] = []
+        self.itemDoubleClicked = FakeSignal()
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def addItem(self, item: FakeListWidgetItem) -> None:
+        self._items.append(item)
+
+    def setIconSize(self, _size: object) -> None:
+        pass
+
+    def setViewMode(self, _mode: object) -> None:
+        pass
+
+
+class FakeToolBar:
+    """Stub QToolBar for headless tests."""
+
+    def __init__(self, _title: str = "") -> None:
+        self._actions: list[object] = []
+        self._movable = False
+
+    def addWidget(self, widget: object) -> None:
+        self._actions.append(widget)
+
+    def addSeparator(self) -> None:
+        self._actions.append(None)
+
+    def setMovable(self, movable: bool) -> None:
+        self._movable = movable
+
+
+class FakeScrollArea:
+    """Stub QScrollArea for headless tests."""
+
+    def __init__(self, _parent: object | None = None) -> None:
+        self._widget: object | None = None
+
+    def setWidget(self, widget: object) -> None:
+        self._widget = widget
+
+    def setWidgetResizable(self, _resizable: bool) -> None:
+        pass
+
+
 class FakeSplitter:
     """Stub QSplitter for headless tests."""
 
@@ -589,6 +682,30 @@ class FakeUrl:
 
     def toString(self) -> str:
         return self._url
+
+
+class FakeIcon:
+    """Stub QIcon for headless tests."""
+
+    @classmethod
+    def fromTheme(cls, _name: str) -> FakeIcon:
+        return cls()
+
+    def isNull(self) -> bool:
+        return True
+
+
+class FakePixmap:
+    """Stub QPixmap for headless tests."""
+
+    def __init__(self, _path: str = "") -> None:
+        pass
+
+    def isNull(self) -> bool:
+        return True
+
+    def scaled(self, _w: int, _h: int, *_args: object, **_kwargs: object) -> FakePixmap:
+        return self
 
 
 class FakeDesktopServices:
@@ -634,7 +751,10 @@ def install_presentation_stubs() -> dict[str, Any]:
 
     fake_qt_gui.QAction = FakeAction
     fake_qt_gui.QDesktopServices = FakeDesktopServices
+    fake_qt_gui.QIcon = FakeIcon
+    fake_qt_gui.QPixmap = FakePixmap
 
+    fake_qt_core.QSize = lambda w, h: type("Size", (), {"width": lambda: w, "height": lambda: h})()
     fake_qt_core.Qt = FakeQt
     fake_qt_core.QUrl = FakeUrl
 
@@ -656,6 +776,7 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_widgets.QProgressBar = FakeProgressBar
     fake_qt_widgets.QPushButton = FakePushButton
     fake_qt_widgets.QSplitter = FakeSplitter
+    fake_qt_widgets.QStyle = FakeStyle
     fake_qt_widgets.QSystemTrayIcon = FakeSystemTrayIcon
     fake_qt_widgets.QTableWidget = FakeTableWidget
     fake_qt_widgets.QTableWidgetItem = FakeTableWidgetItem
@@ -665,6 +786,11 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_widgets.QVBoxLayout = FakeVBoxLayout
     fake_qt_widgets.QWidget = object
     fake_qt_widgets.QWidgetAction = FakeWidgetAction
+    fake_qt_widgets.QStackedWidget = FakeStackedWidget
+    fake_qt_widgets.QListWidget = FakeListWidget
+    fake_qt_widgets.QListWidgetItem = FakeListWidgetItem
+    fake_qt_widgets.QToolBar = FakeToolBar
+    fake_qt_widgets.QScrollArea = FakeScrollArea
 
     sys.modules["PyQt6"] = fake_qt
     sys.modules["PyQt6.QtCore"] = fake_qt_core
