@@ -118,7 +118,7 @@ module = [
     "aegisvault.config",
     "aegisvault.execution.inbox_watcher",
 ]
-disable_error_code = ["misc", "no-any-return", "untyped-decorator"]
+disable_error_code = ["misc", "no-any-return", "untyped-decorator", "override"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

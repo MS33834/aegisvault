@@ -3,9 +3,7 @@
 import logging
 import sys
 import types
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
+from unittest.mock import Mock, patch
 
 from aegisvault.extensions.registry import load_plugins, load_provider_plugins
 

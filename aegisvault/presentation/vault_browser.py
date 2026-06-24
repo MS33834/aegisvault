@@ -735,7 +735,7 @@ class VaultBrowser(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Open", f"Open failed: {exc}")
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Clean up any remaining decrypted temp files."""
         for path in self._temp_files:
             path.unlink(missing_ok=True)

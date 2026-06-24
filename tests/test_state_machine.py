@@ -103,9 +103,9 @@ def test_terminal_state_no_outbound(terminal_state: TaskState) -> None:
     """COMPLETED, FAILED, and QUARANTINED have no outbound transitions."""
     sm = StateMachine(uuid4(), terminal_state)
     for target in TaskState:
-        assert not sm.can_transition_to(target), (
-            f"{terminal_state.name} should not transition to {target.name}"
-        )
+        assert not sm.can_transition_to(
+            target
+        ), f"{terminal_state.name} should not transition to {target.name}"
 
 
 @pytest.mark.parametrize(

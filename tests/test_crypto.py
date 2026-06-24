@@ -96,7 +96,7 @@ def test_wrong_key_fails(tmp_path: Path, vault_key: bytes) -> None:
 
 def test_truncated_salt_fails(tmp_path: Path, vault_key: bytes) -> None:
     """A vault file with a truncated salt must raise ValueError."""
-    from aegisvault.security.crypto import VERSION, SALT_LEN
+    from aegisvault.security.crypto import VERSION
 
     vault_file = tmp_path / "truncated_salt.vault"
     # Write version + only 10 bytes of salt (need 32)
@@ -109,7 +109,7 @@ def test_truncated_salt_fails(tmp_path: Path, vault_key: bytes) -> None:
 
 def test_truncated_nonce_fails(tmp_path: Path, vault_key: bytes) -> None:
     """A vault file with a truncated nonce must raise ValueError."""
-    from aegisvault.security.crypto import VERSION, SALT_LEN
+    from aegisvault.security.crypto import SALT_LEN, VERSION
 
     vault_file = tmp_path / "truncated_nonce.vault"
     # Write version + full salt + only 5 bytes of nonce (need 12)
@@ -131,7 +131,9 @@ def test_unsupported_version_fails(tmp_path: Path, vault_key: bytes) -> None:
         decrypt_file_stream(vault_file, decrypted, vault_key)
 
 
-def test_atomic_write_cleanup(tmp_path: Path, vault_key: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_atomic_write_cleanup(
+    tmp_path: Path, vault_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """If _atomic_write_bytes fails, the temp file must be cleaned up."""
     from aegisvault.security import crypto
 

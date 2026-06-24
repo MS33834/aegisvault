@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -11,7 +10,7 @@ from aegisvault.api.schemas import ClassificationResult, SensitivityLevel
 from aegisvault.config import AegisConfig, PathConfig
 from aegisvault.execution.vault import VaultManager
 from aegisvault.security.audit_log import AuditLogger
-from aegisvault.security.keytree import derive_vault_key, generate_salt
+from aegisvault.security.keytree import derive_vault_key
 
 
 @pytest.fixture

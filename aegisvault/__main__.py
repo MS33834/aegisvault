@@ -81,7 +81,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     list_parser.add_argument("category", nargs="?", default=None, help="Filter by category name")
 
     export_parser = sub.add_parser("export", help="Export (decrypt) vault files to a directory")
-    export_parser.add_argument("output_dir", type=Path, help="Directory to export decrypted files to")
+    export_parser.add_argument(
+        "output_dir", type=Path, help="Directory to export decrypted files to"
+    )
     export_parser.add_argument("--category", default=None, help="Filter by category name")
     export_parser.add_argument("--query", default=None, help="Search query to filter files")
 

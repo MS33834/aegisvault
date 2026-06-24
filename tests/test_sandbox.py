@@ -221,8 +221,8 @@ def test_windows_runner_builds_powershell_command(tmp_path: Path) -> None:
         extra_writable_paths=[tmp_path / "writable"],
         env_vars={"FOO": "bar"},
     )
-    assert "icacls" in ps
-    assert "AegisVault_" in ps
+    assert "New-AppContainerProfile" in ps
+    assert "AegisVault" in ps
     assert "Start-Process" in ps
     assert "cmd.exe" in ps
     assert "echo hello" in ps

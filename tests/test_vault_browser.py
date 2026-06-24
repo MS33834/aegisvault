@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import types
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,13 +18,11 @@ from aegisvault.orchestration.task_store import TaskStore
 
 from .presentation_stubs import (
     FakeApplication,
-    FakeIcon,
     FakeMessageBox,
     FakeStyle,
     install_presentation_stubs,
     restore_modules,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -260,9 +257,7 @@ def test_browser_category_filter_changes_table(qt_stubs: None, config: AegisConf
     assert browser.file_table.item(0, 0).text() == "tax_return"
 
 
-def test_decrypt_item_no_vault_manager_shows_warning(
-    qt_stubs: None, config: AegisConfig
-) -> None:
+def test_decrypt_item_no_vault_manager_shows_warning(qt_stubs: None, config: AegisConfig) -> None:
     """_decrypt_item shows a warning when no vault key was provided."""
     from aegisvault.presentation.vault_browser import VaultBrowser
 
@@ -423,9 +418,7 @@ def test_close_event_cleans_up_temp_files(qt_stubs: None, config: AegisConfig) -
     assert all(not p.exists() for p in temp_paths)
 
 
-def test_delete_item_removes_from_store_and_filesystem(
-    qt_stubs: None, config: AegisConfig
-) -> None:
+def test_delete_item_removes_from_store_and_filesystem(qt_stubs: None, config: AegisConfig) -> None:
     """_delete_item removes the task from the store and deletes the vault file."""
     from aegisvault.presentation.vault_browser import VaultBrowser
 
@@ -528,9 +521,7 @@ def test_decrypt_item_none_is_noop(qt_stubs: None, config: AegisConfig) -> None:
     assert FakeMessageBox._last_warning is None
 
 
-def test_open_item_no_vault_manager_shows_warning(
-    qt_stubs: None, config: AegisConfig
-) -> None:
+def test_open_item_no_vault_manager_shows_warning(qt_stubs: None, config: AegisConfig) -> None:
     """_open_item shows a warning when no vault key was provided."""
     from aegisvault.presentation.vault_browser import VaultBrowser
 
