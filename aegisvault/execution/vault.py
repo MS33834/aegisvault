@@ -73,7 +73,6 @@ class VaultManager:
             vault_path=vault_path,
             salt=salt,
             nonce=nonce,
-            tag=b"",  # GCM tag is appended to ciphertext by AESGCM.
         )
 
     def decrypt(

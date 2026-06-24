@@ -150,7 +150,6 @@ class ProcessingPipeline:
             vault_path=encrypt_result.vault_path,
             salt=encrypt_result.salt,
             nonce=encrypt_result.nonce,
-            tag=encrypt_result.tag,
         )
 
     def _index(

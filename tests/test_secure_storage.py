@@ -95,8 +95,8 @@ def test_unseal_dict_restores_target_fields(isolated_key_file: Path) -> None:
         "name": "Public Name",
     }
     unsealed = unseal_dict(data, {"api_key", "password"})
-    assert unsealed["api_key"] == "secret-key"
-    assert unsealed["password"] == "secret-password"
+    assert unsealed["api_key"].get_secret_value() == "secret-key"
+    assert unsealed["password"].get_secret_value() == "secret-password"
     assert unsealed["name"] == "Public Name"
 
 

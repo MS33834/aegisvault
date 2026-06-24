@@ -51,14 +51,12 @@ def fake_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     state = tmp_path / "pass_state.json"
     state.write_text("{}")
     script = tmp_path / "pass"
-    script.write_text(
-        """#!/usr/bin/env python3
+    script_text = """#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
 
-state_path = Path(os.environ["FAKE_PASS_STATE"])
+state_path = Path("__STATE_PATH__")
 args = sys.argv[1:]
 subcommand = args[0]
 entry = args[-1]
@@ -80,10 +78,9 @@ else:
     print(f"Unknown command: {subcommand}", file=sys.stderr)
     sys.exit(1)
 """
-    )
+    script.write_text(script_text.replace("__STATE_PATH__", str(state)))
     script.chmod(stat.S_IRWXU)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
-    monkeypatch.setenv("FAKE_PASS_STATE", str(state))
     return script
 
 

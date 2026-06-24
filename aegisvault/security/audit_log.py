@@ -32,6 +32,8 @@ ALLOWED_EVENT_TYPES: frozenset[str] = frozenset(
     }
 )
 
+_MAX_LOG_SIZE = 100 * 1024 * 1024  # 100 MB
+
 
 class AuditLogger:
     """Append-only NDJSON audit logger with HMAC integrity checks."""
@@ -100,9 +102,16 @@ class AuditLogger:
         self._append(record)
 
     def _append(self, record: dict[str, Any]) -> None:
+        """Append a record to the audit log file."""
         line = json.dumps(record, default=str) + "\n"
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(line)
+        # Rotate if the log file exceeds the max size
+        if self.log_path.exists() and self.log_path.stat().st_size > _MAX_LOG_SIZE:
+            rotated = self.log_path.with_suffix(".log.1.ndjson")
+            self.log_path.replace(rotated)
+        with self.log_path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def _iter_records(self) -> Iterator[tuple[int, dict[str, Any]]]:
         if not self.log_path.exists():

@@ -109,7 +109,11 @@ class PassStore(PasswordStore):
             raise PasswordStoreError(f"{binary} not found on PATH")
 
     def _env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        """Minimal environment for the pass subprocess."""
+        env: dict[str, str] = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        home = os.environ.get("HOME")
+        if home:
+            env["HOME"] = home
         if self.store_dir is not None:
             env["PASSWORD_STORE_DIR"] = str(self.store_dir)
         return env
@@ -117,29 +121,39 @@ class PassStore(PasswordStore):
     def store(self, entry: str, password: str, **attrs: Any) -> None:
         """Store *password* under *entry* in the password store."""
         cmd = [self.binary, "insert", "--echo", "--force", entry]
-        result = subprocess.run(
-            cmd,
-            input=f"{password}\n",
-            capture_output=True,
-            text=True,
-            check=False,
-            env=self._env(),
-            timeout=60,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                input=f"{password}\n",
+                capture_output=True,
+                text=True,
+                check=False,
+                env=self._env(),
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PasswordStoreError(f"{self.binary} timed out: {exc}") from exc
+        except FileNotFoundError as exc:
+            raise PasswordStoreError(f"{self.binary} not found: {exc}") from exc
         if result.returncode != 0:
             raise PasswordStoreError(f"pass insert failed: {result.stderr.strip()}")
 
     def retrieve(self, entry: str) -> str:
         """Retrieve the password stored under *entry*."""
         cmd = [self.binary, "show", entry]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=self._env(),
-            timeout=60,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=self._env(),
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PasswordStoreError(f"{self.binary} timed out: {exc}") from exc
+        except FileNotFoundError as exc:
+            raise PasswordStoreError(f"{self.binary} not found: {exc}") from exc
         if result.returncode != 0:
             raise PasswordStoreError(f"pass show failed: {result.stderr.strip()}")
         lines = result.stdout.splitlines()

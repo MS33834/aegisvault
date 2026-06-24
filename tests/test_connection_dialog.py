@@ -96,7 +96,7 @@ def test_edit_dialog_adds_connection(dialog_qt_stubs: None, manager: ConnectionM
     assert connections[0].name == "New Connection"
     assert connections[0].platform_type == PlatformType.LM_STUDIO
     assert connections[0].auth_method == AuthMethod.API_KEY
-    assert connections[0].api_key == "key"
+    assert connections[0].api_key.get_secret_value() == "key"
     assert connections[0].is_local is True
     assert connections[0].is_cloud_authorized is False
 
@@ -158,7 +158,7 @@ def test_connection_from_form(dialog_qt_stubs: None, manager: ConnectionManager)
     assert data["platform_type"] == PlatformType.ANTHROPIC
     assert data["auth_method"] == AuthMethod.BASIC
     assert data["username"] == "u"
-    assert data["password"] == "p"
+    assert data["password"].get_secret_value() == "p"
     assert data["is_local"] is False
     assert data["is_cloud_authorized"] is True
 

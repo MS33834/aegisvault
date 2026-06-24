@@ -15,6 +15,7 @@ from aegisvault.model.provider import (
     register_provider,
 )
 from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+from pydantic import SecretStr
 
 
 @pytest.fixture
@@ -196,7 +197,7 @@ def test_build_headers_custom_headers(connection: Connection) -> None:
     """Custom headers are preserved alongside auth headers."""
     connection.custom_headers = {"X-Custom": "value"}
     connection.auth_method = AuthMethod.BEARER
-    connection.api_key = "token"
+    connection.api_key = SecretStr("token")
     headers = _build_headers(connection)
     assert headers["X-Custom"] == "value"
     assert headers["Authorization"] == "Bearer token"

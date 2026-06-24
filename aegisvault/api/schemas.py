@@ -50,7 +50,6 @@ class EncryptResult(BaseModel):
     vault_path: Path
     salt: bytes
     nonce: bytes
-    tag: bytes
 
 
 class TaskStatus(BaseModel):

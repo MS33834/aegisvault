@@ -17,10 +17,11 @@ def _build_headers(connection: Connection) -> dict[str, str]:
     headers: dict[str, str] = {}
     headers.update(connection.custom_headers)
 
-    if connection.auth_method == AuthMethod.BEARER and connection.api_key:
-        headers["Authorization"] = f"Bearer {connection.api_key}"
-    elif connection.auth_method == AuthMethod.API_KEY and connection.api_key:
-        headers["Authorization"] = connection.api_key
+    api_key = connection.api_key.get_secret_value()
+    if connection.auth_method == AuthMethod.BEARER and api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif connection.auth_method == AuthMethod.API_KEY and api_key:
+        headers["Authorization"] = api_key
 
     return headers
 
@@ -51,12 +52,13 @@ class OpenAICompatibleProvider(ModelProvider):
     ) -> None:
         self.connection = connection
         self.temperature = temperature
+        password = connection.password.get_secret_value()
         auth = (
-            httpx.BasicAuth(connection.username, connection.password)
+            httpx.BasicAuth(connection.username, password)
             if (
                 connection.auth_method == AuthMethod.BASIC
                 and connection.username
-                and connection.password
+                and password
             )
             else None
         )

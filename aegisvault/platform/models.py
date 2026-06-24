@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class PlatformType(StrEnum):
@@ -39,9 +39,9 @@ class Connection(BaseModel):
     base_url: str
     model_name: str = ""
     auth_method: AuthMethod = AuthMethod.NONE
-    api_key: str = ""
+    api_key: SecretStr = SecretStr("")
     username: str = ""
-    password: str = ""
+    password: SecretStr = SecretStr("")
     is_local: bool = True
     is_enabled: bool = True
     is_cloud_authorized: bool = False

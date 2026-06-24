@@ -63,4 +63,4 @@ def test_api_key_roundtrip(tmp_path: Path, isolated_storage_key: Path) -> None:
     reloaded = ConnectionManager(storage)
     conn = _find_connection_by_name(reloaded, "Cloud OpenAI")
     assert conn is not None
-    assert conn.api_key == "sk-secret-12345"
+    assert conn.api_key.get_secret_value() == "sk-secret-12345"

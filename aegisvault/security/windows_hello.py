@@ -12,21 +12,17 @@ TPM secret and the user are present.
 
 import logging
 import os
+import stat
 import sys
 from pathlib import Path
 
 from aegisvault.security.keytree import generate_salt
+from aegisvault.security.win_helpers import _require_windows
 
 logger = logging.getLogger(__name__)
 
 SALT_FILE_NAME = "windows_hello.salt"
 SALT_LEN = 32
-
-
-def _require_windows() -> None:
-    """Raise RuntimeError when the current platform is not Windows."""
-    if sys.platform != "win32":
-        raise RuntimeError("Windows Hello is only available on Windows")
 
 
 class WindowsHelloError(RuntimeError):
@@ -262,11 +258,22 @@ def get_key_derivation_salt(
         raise WindowsHelloError("Windows Hello verification failed or was cancelled")
 
     salt_path = storage_path.parent / SALT_FILE_NAME
-    if salt_path.exists():
+    try:
         return salt_path.read_bytes()
+    except FileNotFoundError:
+        pass
 
     salt = generate_salt()
     storage_path.parent.mkdir(parents=True, exist_ok=True)
-    salt_path.write_bytes(salt)
-    os.chmod(salt_path, 0o600)
+    fd = os.open(
+        salt_path,
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        stat.S_IRUSR | stat.S_IWUSR,
+    )
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(salt)
+    except Exception:
+        os.close(fd)
+        raise
     return salt

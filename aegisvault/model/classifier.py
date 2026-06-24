@@ -210,23 +210,25 @@ class Classifier:
         Prefers trusted local connections. Only uses cloud connections when
         allow_cloud_fallback is True and the connection is explicitly authorized.
         """
-        conn: Connection | None = None
+        # First pass: look for a trusted local connection.
         for candidate in manager.list_enabled():
             if "chat" not in candidate.capabilities:
                 continue
             if candidate.is_trusted_local():
-                conn = candidate
-                break
-            if allow_cloud_fallback and candidate.is_cloud_authorized:
-                conn = candidate
-                break
+                return cls(create_provider(candidate), candidate)
 
-        if conn is None:
-            raise RuntimeError(
-                "No suitable chat connection found. "
-                "Please configure a local model service or authorize a cloud connection."
-            )
-        return cls(create_provider(conn), conn)
+        # Second pass: fall back to a cloud connection if allowed.
+        if allow_cloud_fallback:
+            for candidate in manager.list_enabled():
+                if "chat" not in candidate.capabilities:
+                    continue
+                if candidate.is_cloud_authorized:
+                    return cls(create_provider(candidate), candidate)
+
+        raise RuntimeError(
+            "No suitable chat connection found. "
+            "Please configure a local model service or authorize a cloud connection."
+        )
 
     async def classify(self, path: Path) -> ClassificationResult:
         """Classify a file by path."""

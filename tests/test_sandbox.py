@@ -99,7 +99,6 @@ def test_linux_runner_builds_expected_argv(tmp_path: Path) -> None:
         env_vars={"FOO": "bar"},
     )
     assert argv[0] == "/usr/bin/bwrap"
-    assert "--unshare-net" in argv
     assert "--die-with-parent" in argv
     assert "--unshare-all" in argv
     assert "--ro-bind" in argv

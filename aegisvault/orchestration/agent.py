@@ -152,15 +152,38 @@ class AegisAgent:
 
     async def search(self, query: SearchQuery) -> list[SearchResult]:
         """Search vault metadata by keywords and semantic similarity."""
-        fts_results = self.task_store.search(query.query, top_k=query.top_k)
+        fts_results = await asyncio.to_thread(
+            self.task_store.search, query.query, top_k=query.top_k
+        )
         if self._embedding_provider is None:
             return fts_results
-        semantic_results = self.task_store.semantic_search(
-            query.query,
-            top_k=query.top_k,
-            provider=self._embedding_provider,
-        )
+        provider = self._embedding_provider
+
+        # Embedding is CPU-bound, also offload to a worker thread.
+        def _semantic() -> list[SearchResult]:
+            return self.task_store.semantic_search(
+                query.query,
+                top_k=query.top_k,
+                provider=provider,
+            )
+
+        semantic_results = await asyncio.to_thread(_semantic)
         return _merge_search_results(fts_results, semantic_results, top_k=query.top_k)
+
+    async def aclose(self) -> None:
+        """Clean up resources."""
+        self.stop_monitoring()
+        if hasattr(self.classifier, "provider") and hasattr(self.classifier.provider, "close"):
+            try:
+                await self.classifier.provider.close()
+            except Exception:
+                pass
+
+    def __aenter__(self) -> "AegisAgent":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.aclose()
 
 
 def _merge_search_results(

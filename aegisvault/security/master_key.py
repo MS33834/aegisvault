@@ -33,6 +33,14 @@ def get_registered_providers() -> dict[str, type["MasterKeyProvider"]]:
     return dict(_REGISTRY)
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write *data* to *path* atomically with owner-only permissions."""
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_bytes(data)
+    os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
+    tmp_path.replace(path)
+
+
 class MasterKeyProvider(ABC):
     """Abstract base for master key acquisition and protection."""
 
@@ -195,7 +203,7 @@ class DpapiMasterKeyProvider(MasterKeyProvider):
 
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         protected = protect_data(key)
-        self.storage_path.write_bytes(protected)
+        _atomic_write_bytes(self.storage_path, protected)
 
 
 class TpmMasterKeyProvider(MasterKeyProvider):
@@ -248,7 +256,7 @@ class TpmMasterKeyProvider(MasterKeyProvider):
                 overwrite=True,
             )
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            self.storage_path.write_bytes(encrypted)
+            _atomic_write_bytes(self.storage_path, encrypted)
         else:
             encrypted = self.storage_path.read_bytes()
             key_material = _ncrypt_decrypt_with_persistent_key(

@@ -85,7 +85,7 @@ def test_powershell_raises_when_not_found(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_apply_block_rule_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """apply_block_rule removes an existing rule then creates a new one on Windows."""
-    monkeypatch.setattr("aegisvault.security.firewall.sys.platform", "win32")
+    monkeypatch.setattr("aegisvault.security.win_helpers.sys.platform", "win32")
     mock_run = MagicMock()
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = firewall.RULE_NAME
@@ -103,7 +103,7 @@ def test_apply_block_rule_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_remove_block_rule_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """remove_block_rule runs the removal command on Windows."""
-    monkeypatch.setattr("aegisvault.security.firewall.sys.platform", "win32")
+    monkeypatch.setattr("aegisvault.security.win_helpers.sys.platform", "win32")
     mock_run = MagicMock()
     mock_run.return_value.returncode = 0
     monkeypatch.setattr("aegisvault.security.firewall.subprocess.run", mock_run)
@@ -118,7 +118,7 @@ def test_remove_block_rule_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_rule_exists_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """rule_exists parses the PowerShell output on Windows."""
-    monkeypatch.setattr("aegisvault.security.firewall.sys.platform", "win32")
+    monkeypatch.setattr("aegisvault.security.win_helpers.sys.platform", "win32")
     mock_run = MagicMock()
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = firewall.RULE_NAME
@@ -130,7 +130,7 @@ def test_rule_exists_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_rule_exists_false_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """rule_exists returns False when the rule name is absent from output."""
-    monkeypatch.setattr("aegisvault.security.firewall.sys.platform", "win32")
+    monkeypatch.setattr("aegisvault.security.win_helpers.sys.platform", "win32")
     mock_run = MagicMock()
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = "Other-Rule"

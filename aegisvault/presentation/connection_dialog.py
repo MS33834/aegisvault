@@ -30,6 +30,7 @@ except ModuleNotFoundError as exc:
 
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+from pydantic import SecretStr
 
 
 class ConnectionEditDialog(QDialog):
@@ -93,9 +94,9 @@ class ConnectionEditDialog(QDialog):
             self.model_name_input.setText(connection.model_name)
             self.platform_combo.setCurrentText(connection.platform_type.value)
             self.auth_combo.setCurrentText(connection.auth_method.value)
-            self.api_key_input.setText(connection.api_key)
+            self.api_key_input.setText(connection.api_key.get_secret_value())
             self.username_input.setText(connection.username)
-            self.password_input.setText(connection.password)
+            self.password_input.setText(connection.password.get_secret_value())
             self.local_check.setChecked(connection.is_local)
             self.cloud_auth_check.setChecked(connection.is_cloud_authorized)
 
@@ -129,9 +130,9 @@ class ConnectionEditDialog(QDialog):
             "base_url": self.base_url_input.text().strip(),
             "model_name": self.model_name_input.text().strip(),
             "auth_method": AuthMethod(self.auth_combo.currentText()),
-            "api_key": self.api_key_input.text(),
+            "api_key": SecretStr(self.api_key_input.text()),
             "username": self.username_input.text(),
-            "password": self.password_input.text(),
+            "password": SecretStr(self.password_input.text()),
             "is_local": self.local_check.isChecked(),
             "is_cloud_authorized": self.cloud_auth_check.isChecked(),
         }

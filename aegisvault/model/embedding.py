@@ -56,7 +56,8 @@ class SentenceTransformersProvider(LocalEmbeddingProvider):
         if hasattr(embeddings, "tolist"):
             result: list[list[float]] = embeddings.tolist()
         else:
-            result = embeddings
+            # Fallback: convert iterables to list of lists
+            result = [list(v) for v in embeddings]
         return result
 
 

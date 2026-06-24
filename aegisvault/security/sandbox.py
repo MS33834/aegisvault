@@ -9,6 +9,7 @@ AppContainer / LowBoxToken) sandboxes.
 from __future__ import annotations
 
 import abc
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,20 @@ from pathlib import Path
 from typing import ClassVar
 
 from aegisvault.config import AegisConfig
+
+_RESERVED_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONHOME",
+    }
+)
+_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class SandboxError(Exception):
@@ -87,7 +102,6 @@ class LinuxSandboxRunner(SandboxRunner):
             bwrap_path,
             "--die-with-parent",
             "--unshare-all",
-            "--share-net",  # We explicitly disable network below.
             "--proc",
             "/proc",
             "--dev",
@@ -118,12 +132,6 @@ class LinuxSandboxRunner(SandboxRunner):
             "/tmp",
         ]
 
-        # Explicit network isolation: replace the share-net above with
-        # unshare-net when we want no network access.
-        # bwrap semantics: --share-net means keep network namespace. The runner
-        # policy is *no* network, so we use --unshare-net instead.
-        args = ["--unshare-net" if arg == "--share-net" else arg for arg in args]
-
         if extra_readonly_paths:
             for path in extra_readonly_paths:
                 if path.exists():
@@ -148,6 +156,10 @@ class LinuxSandboxRunner(SandboxRunner):
         )
         if env_vars:
             for key, value in env_vars.items():
+                if key in _RESERVED_ENV_KEYS:
+                    continue
+                if not _ENV_KEY_PATTERN.match(key):
+                    continue
                 args.extend(["--setenv", key, value])
 
         args.extend(["--", *command])

@@ -9,18 +9,13 @@ attempted, but command generation can still be unit-tested.
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+
+from aegisvault.security.win_helpers import _require_windows
 
 RULE_NAME = "AegisVault-Core-Outbound-Block"
 RULE_DISPLAY_NAME = "AegisVault Core Process Outbound Block"
 RULE_DESCRIPTION = "Block all outbound traffic from the AegisVault core process."
-
-
-def _require_windows() -> None:
-    """Raise if not on Windows."""
-    if sys.platform != "win32":
-        raise RuntimeError("Firewall rules can only be applied on Windows")
 
 
 def _powershell() -> str:

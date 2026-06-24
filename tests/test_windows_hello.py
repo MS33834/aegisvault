@@ -16,14 +16,14 @@ from aegisvault.security import windows_hello
 @pytest.mark.skipif(sys.platform == "win32", reason="Non-Windows degradation test")
 def test_verify_user_identity_raises_on_linux() -> None:
     """verify_user_identity raises a clear RuntimeError on Linux."""
-    with pytest.raises(RuntimeError, match="only available on Windows"):
+    with pytest.raises(RuntimeError, match="non-Windows platform"):
         windows_hello.verify_user_identity()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Non-Windows degradation test")
 def test_get_key_derivation_salt_raises_on_linux() -> None:
     """get_key_derivation_salt raises a clear RuntimeError on Linux."""
-    with pytest.raises(RuntimeError, match="only available on Windows"):
+    with pytest.raises(RuntimeError, match="non-Windows platform"):
         windows_hello.get_key_derivation_salt(Path("/tmp/dummy"))
 
 
