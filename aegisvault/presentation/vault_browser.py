@@ -17,8 +17,8 @@ from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
 
 try:
-    from PyQt6.QtCore import QSize, Qt
-    from PyQt6.QtGui import QIcon, QPixmap
+    from PyQt6.QtCore import QSize, Qt, QTimer
+    from PyQt6.QtGui import QCloseEvent, QIcon, QPixmap
     from PyQt6.QtWidgets import (
         QAbstractItemView,
         QComboBox,
@@ -160,6 +160,7 @@ class VaultBrowser(QDialog):
         self.vault_key = vault_key
         self.vault_manager = VaultManager(vault_path, vault_key) if vault_key else None
         self._items: list[dict[str, Any]] = []
+        self._temp_files: list[Path] = []
 
         # ---- sorting state --------------------------------------------------
         self._sort_column = self.COL_NAME
@@ -709,6 +710,9 @@ class VaultBrowser(QDialog):
             fd, dest = tempfile.mkstemp(prefix="aegisvault_", suffix="_decrypted")
             os.close(fd)
             self.vault_manager.decrypt(item["vault_path"], item["salt"], Path(dest))
+            dest_path = Path(dest)
+            self._temp_files.append(dest_path)
+            QTimer.singleShot(300_000, lambda p=dest_path: p.unlink(missing_ok=True))
             self.preview_text.setPlainText(f"Decrypted to:\n{dest}")
         except Exception as exc:
             QMessageBox.warning(self, "Decrypt", f"Decrypt failed: {exc}")
@@ -724,9 +728,19 @@ class VaultBrowser(QDialog):
             fd, dest = tempfile.mkstemp(prefix="aegisvault_", suffix="_decrypted")
             os.close(fd)
             self.vault_manager.decrypt(item["vault_path"], item["salt"], Path(dest))
-            self._open_path(Path(dest))
+            dest_path = Path(dest)
+            self._temp_files.append(dest_path)
+            QTimer.singleShot(300_000, lambda p=dest_path: p.unlink(missing_ok=True))
+            self._open_path(dest_path)
         except Exception as exc:
             QMessageBox.warning(self, "Open", f"Open failed: {exc}")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Clean up any remaining decrypted temp files."""
+        for path in self._temp_files:
+            path.unlink(missing_ok=True)
+        self._temp_files.clear()
+        super().closeEvent(event)
 
     @staticmethod
     def _open_path(path: Path) -> None:

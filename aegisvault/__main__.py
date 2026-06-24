@@ -3,12 +3,14 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
 from typing import Any
 
 from aegisvault.config import AegisConfig
+from aegisvault.execution.vault import VaultManager
 from aegisvault.orchestration.agent import AegisAgent
 from aegisvault.security import windows_hello
 from aegisvault.security.audit_log import AuditLogger
@@ -77,6 +79,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     list_parser = sub.add_parser("list", help="List vault files, optionally by category")
     list_parser.add_argument("category", nargs="?", default=None, help="Filter by category name")
+
+    export_parser = sub.add_parser("export", help="Export (decrypt) vault files to a directory")
+    export_parser.add_argument("output_dir", type=Path, help="Directory to export decrypted files to")
+    export_parser.add_argument("--category", default=None, help="Filter by category name")
+    export_parser.add_argument("--query", default=None, help="Search query to filter files")
 
     return parser.parse_args(argv)
 
@@ -204,6 +211,64 @@ def cmd_list(agent: AegisAgent, category: str | None = None) -> int:
     return 0
 
 
+def cmd_export(
+    agent: AegisAgent,
+    config: AegisConfig,
+    output_dir: Path,
+    category: str | None = None,
+    query: str | None = None,
+) -> int:
+    """Export (decrypt) vault files to a directory."""
+    items = agent.task_store.list_vault_files(category)
+    if not items:
+        cat_msg = f" in category '{category}'" if category else ""
+        print(f"No vault files found{cat_msg}.")
+        return 0
+
+    if query:
+        from aegisvault.api.schemas import SearchQuery
+
+        async def _search() -> Any:
+            return await agent.search(SearchQuery(query=query))
+
+        results = asyncio.run(_search())
+        result_paths = {str(r.vault_path) for r in results}
+        items = [item for item in items if str(item["vault_path"]) in result_paths]
+
+        if not items:
+            print(f"No vault files match query: {query}")
+            return 0
+
+    if not agent.master_key_provider:
+        print("Cannot export: master key provider is not configured.", file=sys.stderr)
+        return 1
+
+    from aegisvault.security.keytree import derive_vault_key
+
+    vault_key = derive_vault_key(agent.master_key_provider.get_key())
+    output_dir.mkdir(parents=True, exist_ok=True)
+    vault_manager = VaultManager(config.paths.vault, vault_key, agent.audit_logger)
+
+    exported = 0
+    for item in items:
+        vault_path = Path(item["vault_path"])
+        if not vault_path.exists():
+            continue
+        dest = output_dir / vault_path.name
+        if dest.exists():
+            suffix = os.urandom(4).hex()
+            dest = output_dir / f"{dest.stem}_{suffix}{dest.suffix}"
+        try:
+            vault_manager.decrypt(vault_path, item["salt"], dest)
+            exported += 1
+            print(f"  Exported: {dest}")
+        except Exception as exc:
+            print(f"  Failed:   {vault_path} ({exc})", file=sys.stderr)
+
+    print(f"\nExported {exported}/{len(items)} file(s) to {output_dir}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Existing monitoring / tray logic (unchanged)
 # ---------------------------------------------------------------------------
@@ -302,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status(agent, config)
         elif args.command == "list":
             return cmd_list(agent, args.category)
+        elif args.command == "export":
+            return cmd_export(agent, config, args.output_dir, args.category, args.query)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
