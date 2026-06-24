@@ -209,6 +209,25 @@ def cmd_list(agent: AegisAgent, category: str | None = None) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _check_first_run() -> None:
+    """Launch the first-run wizard when settings.json does not exist yet."""
+    from aegisvault.config import PathConfig
+
+    settings_path = PathConfig().settings
+    if settings_path.exists():
+        return
+
+    logger.info("Settings file not found — launching first-run wizard.")
+    from PyQt6.QtWidgets import QApplication
+
+    from aegisvault.presentation.first_run_wizard import FirstRunWizard
+
+    QApplication.instance() or QApplication(sys.argv[:1])
+    wizard = FirstRunWizard(AegisConfig())
+    wizard.exec()
+    logger.info("First-run wizard completed.")
+
+
 def _run_asyncio_loop(loop: asyncio.AbstractEventLoop, shutdown: threading.Event) -> None:
     """Run an asyncio event loop until the shutdown event is set."""
     asyncio.set_event_loop(loop)
@@ -286,6 +305,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
+
+    # --- First-run wizard (before default monitoring path) ---
+    _check_first_run()
 
     # --- Default path (monitoring loop, original behaviour) ---
     config = build_config(args)

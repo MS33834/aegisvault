@@ -40,3 +40,5 @@ ENV/
 htmlcov/
 .storage_key
 .pypirc
+*.core
+core.*

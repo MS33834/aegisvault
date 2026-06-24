@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aegisvault.__main__ import (
+    _check_first_run,
     _create_tray_app,
     _master_key_storage_path,
     build_config,
@@ -20,6 +21,13 @@ from tests.presentation_stubs import (
     install_presentation_stubs,
     restore_modules,
 )
+
+
+@pytest.fixture(autouse=True)
+def _patch_first_run() -> None:
+    """Suppress the first-run wizard in all existing CLI tests."""
+    with patch("aegisvault.__main__._check_first_run"):
+        yield
 
 
 def test_parse_args_defaults() -> None:
@@ -284,3 +292,39 @@ def test_main_with_windows_hello_propagates_verification_failure() -> None:
             main([])
 
     mock_agent_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# First-run wizard integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_check_first_run_skips_when_settings_exist(tmp_path: Path) -> None:
+    """_check_first_run does nothing when settings.json already exists."""
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}")
+
+    with patch("aegisvault.config.PathConfig") as mock_path_cfg:
+        mock_path_cfg.return_value.settings = settings
+        _check_first_run()
+        # No exception, no wizard launched — test passes.
+
+
+def test_check_first_run_launches_wizard(tmp_path: Path) -> None:
+    """_check_first_run launches the wizard when settings.json is missing."""
+    from tests.presentation_stubs import (
+        FakeApplication,
+        install_presentation_stubs,
+        restore_modules,
+    )
+
+    settings = tmp_path / "nonexistent.json"
+    saved = install_presentation_stubs()
+    FakeApplication._instance = None
+    try:
+        with patch("aegisvault.config.PathConfig") as mock_path_cfg:
+            mock_path_cfg.return_value.settings = settings
+            _check_first_run()
+    finally:
+        FakeApplication._instance = None
+        restore_modules(saved)

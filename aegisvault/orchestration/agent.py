@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from uuid import UUID
 
 from aegisvault.api.schemas import FileEvent, SearchQuery, SearchResult, TaskStatus
@@ -14,7 +15,11 @@ from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.task_store import TaskStore
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.security.audit_log import AuditLogger
-from aegisvault.security.master_key import MasterKeyProvider, create_master_key_provider
+from aegisvault.security.master_key import (
+    MasterKeyProvider,
+    create_master_key_provider,
+    should_rotate_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,8 @@ class AegisAgent:
             config.paths.connections.parent / "master_key.bin",
             password=config.security.master_key_password,
         )
+        # Check if the master key is due for rotation.
+        self._check_key_rotation_due(config.paths.connections.parent)
         self._embedding_provider = self._create_embedding_provider(embedding_provider)
         vault_key = self.master_key_provider.get_key()
         self.pipeline = ProcessingPipeline(
@@ -62,6 +69,32 @@ class AegisAgent:
         )
         self.watcher = watcher
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _check_key_rotation_due(self, config_dir: Path) -> None:
+        """Log a warning if the master key is older than the recommended rotation age."""
+        key_file = config_dir / "master_key.bin"
+        try:
+            if not key_file.exists():
+                return
+            mtime = key_file.stat().st_mtime
+            from datetime import UTC, datetime
+
+            creation_time = datetime.fromtimestamp(mtime, tz=UTC)
+            if should_rotate_key(creation_time):
+                logger.warning(
+                    "Master key is older than 90 days and should be rotated. "
+                    "Use rotate_master_key() to perform the rotation."
+                )
+                if self.audit_logger is not None:
+                    self.audit_logger.log(
+                        "policy_violation",
+                        {
+                            "rotage": "master_key_rotation_recommended",
+                            "key_age_days": str((datetime.now(UTC) - creation_time).days),
+                        },
+                    )
+        except OSError:
+            logger.debug("Could not check master key age: %s", key_file, exc_info=True)
 
     def _create_embedding_provider(
         self,

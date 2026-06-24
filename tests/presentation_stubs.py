@@ -219,6 +219,138 @@ class FakeDialogButtonBox:
         self.rejected = FakeSignal()
 
 
+class FakeWizardPage:
+    """Stub QWizardPage for headless tests."""
+
+    def __init__(self) -> None:
+        self._title = ""
+        self._subtitle = ""
+        self._layout: object | None = None
+        self._wizard: FakeWizard | None = None
+        self._pending_fields: list[tuple[str, object, str]] = []
+
+    def setTitle(self, title: str) -> None:
+        self._title = title
+
+    def setSubTitle(self, subtitle: str) -> None:
+        self._subtitle = subtitle
+
+    def setLayout(self, layout: object) -> None:
+        self._layout = layout
+
+    def registerField(
+        self,
+        name: str,
+        widget: object,
+        property_name: str = "text",
+        changed_signal: object | None = None,
+    ) -> None:
+        name_key = name.rstrip("*")
+        wiz = self.wizard()
+        if wiz is not None:
+            wiz._register_field(name_key, widget, property_name)
+        else:
+            self._pending_fields.append((name_key, widget, property_name))
+
+    def field(self, name: str) -> object:
+        wiz = self.wizard()
+        if wiz is not None:
+            return wiz.field(name)
+        return ""
+
+    def setField(self, name: str, value: object) -> None:
+        wiz = self.wizard()
+        if wiz is not None:
+            wiz.setField(name, value)
+
+    def wizard(self) -> FakeWizard | None:
+        return self._wizard
+
+    def setWizard(self, wizard: FakeWizard) -> None:
+        self._wizard = wizard
+        # Flush any pending field registrations.
+        for name_key, widget, prop in self._pending_fields:
+            wizard._register_field(name_key, widget, prop)
+        self._pending_fields.clear()
+
+    def initializePage(self) -> None:
+        pass
+
+    def validatePage(self) -> bool:
+        return True
+
+    def isComplete(self) -> bool:
+        return True
+
+
+class FakeWizard(FakeDialog):
+    """Stub QWizard for headless tests."""
+
+    class WizardStyle:
+        ModernStyle = 1
+        ClassicStyle = 0
+
+    class WizardButton:
+        BackButton = 0
+        NextButton = 1
+        CommitButton = 2
+        FinishButton = 3
+        CancelButton = 4
+        CustomButton1 = 5
+
+    def __init__(self, parent: object | None = None) -> None:
+        super().__init__(parent)
+        self._pages: list[FakeWizardPage] = []
+        self._current_id = 0
+        self._fields: dict[str, object] = {}
+        self._buttons: dict[int, object] = {}
+        self._button_texts: dict[int, str] = {}
+
+    def addPage(self, page: FakeWizardPage) -> int:
+        page.setWizard(self)
+        page_id = len(self._pages)
+        self._pages.append(page)
+        return page_id
+
+    def setWizardStyle(self, style: int) -> None:
+        pass
+
+    def setButtonText(self, button: int, text: str) -> None:
+        self._button_texts[button] = text
+
+    def button(self, button: int) -> object | None:
+        return self._buttons.get(button)
+
+    def setButton(self, button: int, widget: object) -> None:
+        self._buttons[button] = widget
+
+    def nextId(self) -> int:
+        return self._current_id + 1
+
+    def currentId(self) -> int:
+        return self._current_id
+
+    def setCurrentId(self, page_id: int) -> None:
+        self._current_id = page_id
+
+    def _register_field(self, name: str, widget: object, property_name: str) -> None:
+        self._fields[name] = widget
+
+    def field(self, name: str) -> object:
+        value = self._fields.get(name)
+        if value is None:
+            return ""
+        if isinstance(value, FakeLineEdit):
+            return value.text()
+        return value
+
+    def setField(self, name: str, value: object) -> None:
+        widget = self._fields.get(name)
+        if isinstance(widget, FakeLineEdit):
+            widget.setText(str(value))
+        self._fields[name] = value
+
+
 class FakeMessageBox:
     """Stub QMessageBox for headless tests."""
 
@@ -261,6 +393,7 @@ class FakeLineEdit:
         self._placeholder = ""
         self._echo_mode = self.EchoMode.Normal
         self._style_sheet = ""
+        self.textChanged = FakeSignal()
 
     def text(self) -> str:
         return self._text
@@ -791,6 +924,8 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_widgets.QListWidgetItem = FakeListWidgetItem
     fake_qt_widgets.QToolBar = FakeToolBar
     fake_qt_widgets.QScrollArea = FakeScrollArea
+    fake_qt_widgets.QWizard = FakeWizard
+    fake_qt_widgets.QWizardPage = FakeWizardPage
 
     sys.modules["PyQt6"] = fake_qt
     sys.modules["PyQt6.QtCore"] = fake_qt_core
@@ -813,6 +948,7 @@ def restore_modules(saved_modules: dict[str, Any]) -> None:
     sys.modules.pop("aegisvault.presentation.connection_dialog", None)
     sys.modules.pop("aegisvault.presentation.settings_dialog", None)
     sys.modules.pop("aegisvault.presentation.vault_browser", None)
+    sys.modules.pop("aegisvault.presentation.first_run_wizard", None)
     # Force re-import of presentation submodules on the next test by clearing
     # the package-level cache as well.
     presentation = sys.modules.get("aegisvault.presentation")
@@ -821,3 +957,4 @@ def restore_modules(saved_modules: dict[str, Any]) -> None:
         presentation.__dict__.pop("connection_dialog", None)
         presentation.__dict__.pop("settings_dialog", None)
         presentation.__dict__.pop("vault_browser", None)
+        presentation.__dict__.pop("first_run_wizard", None)

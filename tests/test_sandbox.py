@@ -100,7 +100,13 @@ def test_linux_runner_builds_expected_argv(tmp_path: Path) -> None:
     )
     assert argv[0] == "/usr/bin/bwrap"
     assert "--die-with-parent" in argv
-    assert "--unshare-all" in argv
+    assert "--unshare-net" in argv
+    assert "--unshare-ipc" in argv
+    assert "--unshare-uts" in argv
+    assert "--unshare-pid" in argv
+    assert "--unshare-user" in argv
+    assert "--as-pid-1" in argv
+    assert "--tmpfs" in argv
     assert "--ro-bind" in argv
     assert str(config.paths.vault) in argv
     assert "--setenv" in argv
@@ -186,11 +192,20 @@ def test_windows_runner_missing_powershell_raises(tmp_path: Path) -> None:
         pytest.skip("Uses mocked Windows APIs")
     config = _enabled_config(tmp_path)
     runner = WindowsSandboxRunner(config)
+    from aegisvault.security import sandbox as sandbox_mod
+
+    original_which = sandbox_mod.shutil.which
+
+    def _which_mock(name: str) -> str | None:
+        if name in ("pwsh", "powershell"):
+            return None
+        return original_which(name)
+
     with (
-        patch("aegisvault.security.sandbox.shutil.which", return_value=None),
+        patch("aegisvault.security.sandbox.shutil.which", side_effect=_which_mock),
         pytest.raises(SandboxError, match="PowerShell"),
     ):
-        runner.run(["cmd", "/c", "echo hello"])
+        runner.run(["echo", "hello"])
 
 
 def test_windows_runner_builds_powershell_command(tmp_path: Path) -> None:
@@ -278,3 +293,53 @@ def test_windows_runner_timeout_raises_sandbox_error(tmp_path: Path) -> None:
         pytest.raises(SandboxError, match="timed out"),
     ):
         runner.run(["cmd", "/c", "timeout 10"], timeout=2.0)
+
+
+def test_linux_runner_seccomp_profile(tmp_path: Path) -> None:
+    """When seccomp_profile is set, --seccomp is added to bwrap args."""
+    config = _enabled_config(tmp_path)
+    runner = LinuxSandboxRunner(config)
+
+    # No seccomp profile set => no --seccomp flag.
+    argv = runner._build_bwrap_args(
+        "/usr/bin/bwrap",
+        ["/bin/echo", "hello"],
+        tmp_path / "work",
+        extra_readonly_paths=None,
+        extra_writable_paths=None,
+        env_vars=None,
+    )
+    assert "--seccomp" not in argv
+
+    # Set an existing file as seccomp profile.
+    seccomp_path = tmp_path / "seccomp.bpf"
+    seccomp_path.write_text("fake bpf")
+    runner.seccomp_profile = seccomp_path
+    argv = runner._build_bwrap_args(
+        "/usr/bin/bwrap",
+        ["/bin/echo", "hello"],
+        tmp_path / "work",
+        extra_readonly_paths=None,
+        extra_writable_paths=None,
+        env_vars=None,
+    )
+    assert "--seccomp" in argv
+    assert str(seccomp_path) in argv
+
+
+def test_linux_runner_essential_paths_in_args(tmp_path: Path) -> None:
+    """Whitlisted system paths appear in the bwrap argument list."""
+    config = _enabled_config(tmp_path)
+    runner = LinuxSandboxRunner(config)
+    argv = runner._build_bwrap_args(
+        "/usr/bin/bwrap",
+        ["/bin/echo", "hello"],
+        tmp_path / "work",
+        extra_readonly_paths=None,
+        extra_writable_paths=None,
+        env_vars=None,
+    )
+    assert "--tmpfs" in argv
+    assert "--ro-bind" in argv
+    # The TMPDIR env var is set for hardened sandbox.
+    assert "TMPDIR" in argv

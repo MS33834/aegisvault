@@ -106,6 +106,10 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "aegisvault.security.win32_appcontainer"
+disable_error_code = ["operator", "attr-defined"]
+
+[[tool.mypy.overrides]]
 module = [
     "aegisvault.presentation.*",
     "aegisvault.security.*",

@@ -4,17 +4,335 @@ Sensitive classification defaults to trusted local connections.
 Cloud connections are only used as fallback when explicitly authorized.
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any
 
-from aegisvault.api.schemas import ClassificationResult
+from aegisvault.api.schemas import ClassificationResult, SensitivityLevel
 from aegisvault.model import ModelProvider, create_provider
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import Connection
 
 _FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)\s*\n?(.*?)\n?```", re.DOTALL)
+
+
+# ── Sensitive Keywords Table ────────────────────────────────────────────────
+
+SENSITIVE_KEYWORDS: dict[str, list[str]] = {
+    "identity": [
+        "身份证",
+        "护照",
+        "passport",
+        "ID card",
+        "id_card",
+        "idcard",
+        "驾驶证",
+        "户口本",
+        "出生证明",
+        "birth certificate",
+        "social security",
+        "ssn",
+        "visa",
+    ],
+    "finance": [
+        "银行",
+        "bank",
+        "invoice",
+        "发票",
+        "对账单",
+        "statement",
+        "税",
+        "tax",
+        "工资",
+        "salary",
+        "payroll",
+        "receipt",
+        "收据",
+        "账单",
+        "流水",
+        "transaction",
+    ],
+    "legal": [
+        "合同",
+        "协议",
+        "contract",
+        "agreement",
+        "判决",
+        "起诉",
+        "律师",
+        "attorney",
+        "court",
+        "法院",
+        "ndas",
+        "license",
+        "条款",
+        "terms",
+    ],
+    "medical": [
+        "病历",
+        "处方",
+        "诊断",
+        "体检",
+        "medical",
+        "prescription",
+        "diagnosis",
+        "lab",
+        "report",
+        "检查报告",
+        "化验",
+    ],
+    "credentials": [
+        "密码",
+        "password",
+        "token",
+        "密钥",
+        "key",
+        "secret",
+        "credentials",
+        "api_key",
+        "apikey",
+        "private key",
+    ],
+}
+
+# Mapping from keyword category to ClassificationResult category.
+_KEYWORD_CATEGORY_TO_CLASSIFICATION: dict[str, str] = {
+    "identity": "identity",
+    "finance": "finance",
+    "legal": "legal",
+    "medical": "health",
+    "credentials": "credentials",
+}
+
+# Sensitivity level for high-confidence keyword matches.
+_KEYWORD_SENSITIVITY: dict[str, SensitivityLevel] = {
+    "identity": SensitivityLevel.CRITICAL,
+    "finance": SensitivityLevel.HIGH,
+    "legal": SensitivityLevel.HIGH,
+    "medical": SensitivityLevel.HIGH,
+    "credentials": SensitivityLevel.CRITICAL,
+}
+
+# Extensions that are unlikely to contain sensitive content (no LLM needed).
+_BENIGN_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "log",
+        "tmp",
+        "cache",
+        "json",
+        "xml",
+        "yaml",
+        "yml",
+        "lock",
+        "pyc",
+        "pyo",
+        "class",
+        "jar",
+        "exe",
+        "dll",
+        "so",
+        "dylib",
+        "woff",
+        "woff2",
+        "ttf",
+        "eot",
+        "otf",
+    }
+)
+
+# Extensions that are strong signals for text-based classified content.
+_TEXT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "txt",
+        "md",
+        "csv",
+        "pdf",
+        "doc",
+        "docx",
+        "xls",
+        "xlsx",
+        "ppt",
+        "pptx",
+        "rtf",
+        "odt",
+        "ods",
+        "odp",
+    }
+)
+
+# Extensions for image/media files.
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "bmp",
+        "webp",
+        "svg",
+        "tiff",
+        "tif",
+        "ico",
+        "heic",
+        "heif",
+    }
+)
+
+_MEDIA_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "wmv",
+        "flv",
+        "webm",
+        "mp3",
+        "wav",
+        "flac",
+        "aac",
+        "ogg",
+        "wma",
+    }
+)
+
+
+def _file_size_human(st_size: int) -> str:
+    """Return a human-readable file size label."""
+    if st_size < 1024:
+        return "tiny"
+    if st_size < 1024 * 1024:
+        return "small"
+    if st_size < 10 * 1024 * 1024:
+        return "medium"
+    return "large"
+
+
+def _match_keywords(filename_lower: str) -> tuple[str | None, int]:
+    """Search filename for sensitive keywords.
+
+    Returns ``(category, score)`` where *score* is the number of matched
+    keywords (higher = more confidence). Returns ``(None, 0)`` if no match.
+    """
+    best_category: str | None = None
+    best_score = 0
+    for category, keywords in SENSITIVE_KEYWORDS.items():
+        score = 0
+        for kw in keywords:
+            if kw.lower() in filename_lower:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_category = category
+    return best_category, best_score
+
+
+def pre_classify(file_path: Path) -> dict[str, Any] | None:
+    """Pre-classify a file using fast, local heuristics.
+
+    This is a pre-processing step before LLM classification. It uses
+    filename keywords, extension, and file-size metadata to produce a
+    preliminary classification. When the heuristics are confident enough
+    the caller can skip the LLM call entirely.
+
+    Parameters
+    ----------
+    file_path:
+        Path to the file on disk.
+
+    Returns
+    -------
+    A dict suitable for constructing a ``ClassificationResult`` when the
+    heuristics are confident, or ``None`` when LLM classification is needed.
+
+    The returned dict always contains: ``sensitivity``, ``category``, ``tags``,
+    ``summary``, ``disguise_name``, ``disguise_extension``.
+    """
+    filename = file_path.name
+    filename_lower = filename.lower()
+    extension = file_path.suffix.lower().lstrip(".") if file_path.suffix else ""
+
+    try:
+        file_size = file_path.stat().st_size
+    except OSError:
+        return None
+
+    # ── Skip obviously benign files ──
+    if extension in _BENIGN_EXTENSIONS and _match_keywords(filename_lower)[1] == 0:
+        return {
+            "sensitivity": SensitivityLevel.LOW.value,
+            "category": "documents",
+            "tags": ["auto-classified", "benign"],
+            "summary": f"A {extension} file",
+            "disguise_name": _generate_disguise_name(filename),
+            "disguise_extension": "log",
+        }
+
+    size_label = _file_size_human(file_size)
+
+    # ── Keyword matching ──
+    kw_category, kw_score = _match_keywords(filename_lower)
+
+    # Some categories have generic keywords — require higher confidence.
+    min_conf: dict[str, int] = {"credentials": 2}
+
+    if kw_category is not None and kw_score >= min_conf.get(kw_category, 1):
+        category = _KEYWORD_CATEGORY_TO_CLASSIFICATION.get(kw_category, kw_category)
+        sensitivity = _KEYWORD_SENSITIVITY.get(kw_category, SensitivityLevel.MEDIUM).value
+        tags = [category, kw_category]
+        summary = f"A {category} document"
+        disguise_ext = _pick_disguise_extension(extension)
+
+        return {
+            "sensitivity": sensitivity,
+            "category": category,
+            "tags": tags,
+            "summary": summary,
+            "disguise_name": _generate_disguise_name(filename),
+            "disguise_extension": disguise_ext,
+        }
+
+    # ── Media files: can often be classified without LLM ──
+    if extension in _IMAGE_EXTENSIONS:
+        return {
+            "sensitivity": SensitivityLevel.LOW.value,
+            "category": "media",
+            "tags": ["photo", extension, size_label],
+            "summary": f"A digital photograph ({size_label})",
+            "disguise_name": _generate_disguise_name(filename),
+            "disguise_extension": "dat",
+        }
+
+    if extension in _MEDIA_EXTENSIONS:
+        return {
+            "sensitivity": SensitivityLevel.LOW.value,
+            "category": "media",
+            "tags": ["media", extension, size_label],
+            "summary": f"A media file ({size_label})",
+            "disguise_name": _generate_disguise_name(filename),
+            "disguise_extension": "bin",
+        }
+
+    # ── Not confident enough — LLM classification needed ──
+    return None
+
+
+def _generate_disguise_name(filename: str) -> str:
+    """Generate a deterministic disguise name from the filename hash."""
+    digest = hashlib.sha256(filename.lower().encode()).hexdigest()[:8]
+    # Ensure it contains at least one digit.
+    return f"file{digest}"
+
+
+def _pick_disguise_extension(original_ext: str) -> str:
+    """Pick a neutral disguise extension based on the original extension."""
+    if original_ext.lower() in _TEXT_EXTENSIONS:
+        return "csv"
+    if original_ext.lower() in _IMAGE_EXTENSIONS or original_ext.lower() in _MEDIA_EXTENSIONS:
+        return "dat"
+    return "log"
 
 
 _REQUIRED_FIELDS = frozenset(
@@ -313,7 +631,17 @@ class Classifier:
         )
 
     async def classify(self, path: Path) -> ClassificationResult:
-        """Classify a file by path."""
+        """Classify a file by path.
+
+        First attempts fast heuristic pre-classification. If the heuristics
+        are confident enough the LLM call is skipped, reducing cost and latency.
+        """
+        # 1. Try heuristic pre-classification first.
+        pre_result = pre_classify(path)
+        if pre_result is not None:
+            return ClassificationResult(**pre_result)
+
+        # 2. Fall through to LLM classification.
         prompt = self.prompt_template.format(
             filename=path.name,
             size=path.stat().st_size,
