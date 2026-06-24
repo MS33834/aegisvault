@@ -39,3 +39,4 @@ ENV/
 .coverage
 htmlcov/
 .storage_key
+.pypirc

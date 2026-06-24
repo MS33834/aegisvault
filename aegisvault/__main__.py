@@ -67,6 +67,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Enable debug logging.",
     )
+
+    sub = parser.add_subparsers(dest="command", help="Available subcommands")
+
+    search_parser = sub.add_parser("search", help="Search vault content by keywords")
+    search_parser.add_argument("query", help="Search query string")
+
+    sub.add_parser("status", help="Show agent status (inbox/vault counts, recent tasks)")
+
+    list_parser = sub.add_parser("list", help="List vault files, optionally by category")
+    list_parser.add_argument(
+        "category", nargs="?", default=None, help="Filter by category name"
+    )
+
     return parser.parse_args(argv)
 
 
@@ -83,6 +96,119 @@ def build_config(args: argparse.Namespace) -> AegisConfig:
     if args.connections:
         config.paths.connections = args.connections
     return config
+
+
+def _create_agent(config: AegisConfig) -> AegisAgent:
+    """Create an AegisAgent with minimal setup (no monitoring loop)."""
+    audit_logger = AuditLogger(config)
+
+    master_key_provider: MasterKeyProvider | None = None
+    if config.security.windows_hello_enabled:
+        storage_path = _master_key_storage_path(config)
+        hello_salt = windows_hello.get_key_derivation_salt(storage_path)
+        master_key_provider = create_master_key_provider(
+            config.security.master_key_provider,
+            storage_path,
+            password=config.security.master_key_password,
+            hello_salt=hello_salt,
+        )
+
+    return AegisAgent(
+        config,
+        audit_logger=audit_logger,
+        master_key_provider=master_key_provider,
+    )
+
+
+def _count_files(path: Path) -> int:
+    """Count regular files in a directory (non-recursive)."""
+    if not path.exists() or not path.is_dir():
+        return 0
+    return sum(1 for entry in path.iterdir() if entry.is_file())
+
+
+def _count_vault_files(path: Path) -> int:
+    """Count all regular files in the Vault directory tree."""
+    if not path.exists() or not path.is_dir():
+        return 0
+    return sum(1 for entry in path.rglob("*") if entry.is_file())
+
+
+# ---------------------------------------------------------------------------
+# Subcommand handlers
+# ---------------------------------------------------------------------------
+
+
+def cmd_search(agent: AegisAgent, query: str) -> int:
+    """Search vault content by keywords."""
+    from aegisvault.api.schemas import SearchQuery
+
+    async def _search() -> Any:
+        return await agent.search(SearchQuery(query=query))
+
+    results = asyncio.run(_search())
+    if not results:
+        print(f"No results found for: {query}")
+        return 0
+
+    for i, result in enumerate(results, 1):
+        print(f"{i}. {result.vault_path}")
+        print(f"   Category: {result.category}")
+        print(f"   Summary: {result.summary}")
+        print(f"   Score:   {result.score:.4f}")
+        print()
+    return 0
+
+
+def cmd_status(agent: AegisAgent, config: AegisConfig) -> int:
+    """Show agent status."""
+    inbox_count = _count_files(config.paths.inbox)
+    vault_count = _count_vault_files(config.paths.vault)
+    recent = agent.task_store.list_recent(limit=5)
+
+    print("=== AegisVault Status ===")
+    print(f"  Inbox files : {inbox_count}")
+    print(f"  Vault files : {vault_count}")
+    print()
+
+    if recent:
+        print("Recent tasks:")
+        for summary in recent:
+            src = str(summary.source_path) if summary.source_path else "N/A"
+            print(f"  {summary.task_id}  [{summary.state}]  {src}")
+            if summary.message:
+                print(f"    {summary.message}")
+    else:
+        print("No recent tasks.")
+    return 0
+
+
+def cmd_list(agent: AegisAgent, category: str | None = None) -> int:
+    """List vault files, optionally filtered by category."""
+    items = agent.task_store.list_vault_files(category)
+
+    if not items:
+        cat_msg = f" in category '{category}'" if category else ""
+        print(f"No vault files found{cat_msg}.")
+        return 0
+
+    cat_msg = f" in category '{category}'" if category else ""
+    print(f"Vault files{cat_msg} ({len(items)} total):")
+    print()
+    for i, item in enumerate(items, 1):
+        print(f"{i}. {item['vault_path']}")
+        print(f"   Category: {item['category']}")
+        if item["summary"]:
+            print(f"   Summary: {item['summary']}")
+        if item["tags"]:
+            print(f"   Tags:    {', '.join(item['tags'])}")
+        print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Existing monitoring / tray logic (unchanged)
+# ---------------------------------------------------------------------------
 
 
 def _run_asyncio_loop(loop: asyncio.AbstractEventLoop, shutdown: threading.Event) -> None:
@@ -146,6 +272,24 @@ def main(argv: list[str] | None = None) -> int:
     """Run the AegisVault CLI entry point."""
     args = parse_args(argv)
     _configure_logging(args.debug)
+
+    # --- Subcommand path (no monitoring loop) ---
+    if args.command is not None:
+        config = build_config(args)
+        agent = _create_agent(config)
+        logger.info("AegisVault CLI - %s", args.command)
+
+        if args.command == "search":
+            return cmd_search(agent, args.query)
+        elif args.command == "status":
+            return cmd_status(agent, config)
+        elif args.command == "list":
+            return cmd_list(agent, args.category)
+        else:
+            print(f"Unknown command: {args.command}", file=sys.stderr)
+            return 1
+
+    # --- Default path (monitoring loop, original behaviour) ---
     config = build_config(args)
     audit_logger = AuditLogger(config)
 

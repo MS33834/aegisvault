@@ -39,9 +39,9 @@ semantic = ["sentence-transformers>=3.0,<4.0"]
 aegisvault = "aegisvault.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/aegisvault/aegisvault"
-Repository = "https://github.com/aegisvault/aegisvault"
-Issues = "https://github.com/aegisvault/aegisvault/issues"
+Homepage = "https://github.com/MS33834/aegisvault"
+Repository = "https://github.com/MS33834/aegisvault"
+Issues = "https://github.com/MS33834/aegisvault/issues"
 
 [tool.poetry]
 name = "aegisvault"
@@ -49,6 +49,9 @@ version = "0.1.0"
 description = "Local private content management agent"
 authors = ["AegisVault Team"]
 packages = [{ include = "aegisvault" }]
+
+[tool.poetry.scripts]
+aegisvault = "aegisvault.__main__:main"
 
 [tool.poetry.dependencies]
 python = ">=3.11"

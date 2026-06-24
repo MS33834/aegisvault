@@ -1,0 +1,24 @@
+
+services:
+  aegisvault:
+    build: .
+    image: aegisvault:latest
+    container_name: aegisvault
+    restart: unless-stopped
+    # Run in headless mode (no system tray UI in container)
+    command: ["--no-tray"]
+    volumes:
+      # Mount custom paths for persistent data
+      - ./data/inbox:/app/data/inbox
+      - ./data/vault:/app/data/vault
+      - ./data/index:/app/data/index
+      - ./data/connections:/app/data/connections
+    # Uncomment to override the default paths:
+    # command:
+    #   - "--no-tray"
+    #   - "--inbox=/app/data/inbox"
+    #   - "--vault=/app/data/vault"
+    #   - "--index=/app/data/index"
+    #   - "--connections=/app/data/connections/file.json"
+    stdin_open: true
+    tty: true

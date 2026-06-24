@@ -42,3 +42,10 @@ htmlcov/
 docs/
 tests/
 .storage_key
+
+# Docker / devops
+Dockerfile
+docker-compose.yml
+.git/
+.gitignore
+sync.sh

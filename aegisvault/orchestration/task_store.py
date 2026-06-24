@@ -511,3 +511,36 @@ class TaskStore:
                 (limit,),
             ).fetchall()
         return self._rows_to_summaries(rows)
+
+    def list_vault_files(self, category: str | None = None) -> list[dict[str, Any]]:
+        """Return completed vault file metadata, optionally filtered by category."""
+        with self._connect(row_factory=sqlite3.Row) as conn:
+            rows = conn.execute(
+                "SELECT task_id, vault_path, classification FROM tasks "
+                "WHERE vault_path IS NOT NULL AND state = ? "
+                "ORDER BY updated_at DESC, created_at DESC",
+                (TaskState.COMPLETED.name,),
+            ).fetchall()
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            classification_raw = row["classification"]
+            if not classification_raw:
+                continue
+            try:
+                cls_data = json.loads(classification_raw)
+            except json.JSONDecodeError:
+                continue
+            cat = cls_data.get("category", "unknown")
+            if category is not None and cat != category:
+                continue
+            results.append(
+                {
+                    "task_id": row["task_id"],
+                    "vault_path": row["vault_path"],
+                    "category": cat,
+                    "summary": cls_data.get("summary", ""),
+                    "tags": cls_data.get("tags", []),
+                }
+            )
+        return results
