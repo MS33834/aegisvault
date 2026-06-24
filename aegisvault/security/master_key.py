@@ -107,13 +107,19 @@ class FilePasswordProvider(MasterKeyProvider):
             )
         except FileExistsError:
             return
+        # os.fdopen takes ownership of *fd* once it succeeds; the with-block
+        # below then owns closing it. If fdopen itself fails, *fd* is still
+        # open and unowned, so close it manually here. (If fh.write fails the
+        # with-block's __exit__ has already closed *fd* — closing it again
+        # here would raise EBADF, which was the original double-close bug.)
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(salt)
+            fh = os.fdopen(fd, "wb")
         except OSError:
             with contextlib.suppress(OSError):
                 os.close(fd)
             raise
+        with fh:
+            fh.write(salt)
 
     def get_key(self) -> bytes:
         """Derive master key from password using Argon2id."""

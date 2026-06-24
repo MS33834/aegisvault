@@ -94,14 +94,20 @@ class ConnectionManager:
 
         provider = self._create_provider(conn)
         try:
-            healthy = asyncio.run(provider.health())
-            if healthy:
-                return True, f"Connected to {conn.base_url}"
-            return False, f"No response from {conn.base_url}"
-        except Exception as exc:  # noqa: BLE001
-            return False, f"Error: {exc}"
-        finally:
-            asyncio.run(provider.close())
+            async def _test() -> tuple[bool, str]:
+                try:
+                    healthy = await provider.health()
+                    if healthy:
+                        return True, f"Connected to {conn.base_url}"
+                    return False, f"No response from {conn.base_url}"
+                except Exception as exc:
+                    return False, f"Error: {exc}"
+                finally:
+                    await provider.close()
+            return asyncio.run(_test())
+        except RuntimeError:
+            # Already in an async context - can't use asyncio.run
+            return False, "Cannot test connection from async context"
 
     def _load(self) -> None:
         if not self.storage_path.exists():
@@ -118,11 +124,25 @@ class ConnectionManager:
             self._save()
             return
 
-        raw = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to load connections from %s; starting with empty config",
+                self.storage_path,
+            )
+            return
         for item in raw.get("connections", []):
-            decrypted = unseal_dict(item, SENSITIVE_FIELDS)
-            conn = Connection.model_validate(decrypted)
-            self._connections[conn.id] = conn
+            try:
+                decrypted = unseal_dict(item, SENSITIVE_FIELDS)
+                conn = Connection.model_validate(decrypted)
+                self._connections[conn.id] = conn
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Skipping invalid connection entry: %s", item, exc_info=True,
+                )
 
     def _save(self) -> None:
         data: dict[str, Any] = {
@@ -132,4 +152,7 @@ class ConnectionManager:
                 for conn in self._connections.values()
             ],
         }
-        self.storage_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        content = json.dumps(data, indent=2, default=str)
+        tmp_path = self.storage_path.with_suffix(".tmp")
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.replace(self.storage_path)

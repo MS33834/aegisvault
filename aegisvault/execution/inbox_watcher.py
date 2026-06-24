@@ -26,7 +26,27 @@ class InboxEventHandler(FileSystemEventHandler):
             source_path=path,
             event_type="created",
         )
-        self.callback(file_event)
+        try:
+            self.callback(file_event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Inbox watcher callback failed for %s", path)
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        """Process moved file events."""
+        if event.is_directory:
+            return
+        path = Path(str(event.dest_path))
+        file_event = FileEvent(
+            event_id=uuid4(),
+            source_path=path,
+            event_type="moved",
+        )
+        try:
+            self.callback(file_event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Inbox watcher callback failed for %s", path)
 
 
 class InboxWatcher:
@@ -37,14 +57,19 @@ class InboxWatcher:
         self.callback = callback
         self.observer = Observer()
         self.handler = InboxEventHandler(callback)
+        self._started = False
 
     def start(self) -> None:
         """Start watching."""
         self.inbox_path.mkdir(parents=True, exist_ok=True)
         self.observer.schedule(self.handler, str(self.inbox_path), recursive=False)  # type: ignore[no-untyped-call]
         self.observer.start()  # type: ignore[no-untyped-call]
+        self._started = True
 
     def stop(self) -> None:
         """Stop watching."""
+        if not self._started:
+            return
+        self._started = False
         self.observer.stop()  # type: ignore[no-untyped-call]
         self.observer.join()

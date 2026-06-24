@@ -78,7 +78,10 @@ class OpenAICompatibleProvider(ModelProvider):
         response = await self.client.post("/v1/chat/completions", json=payload)
         response.raise_for_status()
         data = response.json()
-        return cast(str, data["choices"][0]["message"]["content"])
+        try:
+            return cast(str, data["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"Unexpected API response structure: {data}") from exc
 
     async def health(self) -> bool:
         """Check provider health."""
@@ -142,13 +145,14 @@ def _load_provider_plugins() -> None:
     global _PLUGINS_LOADED
     if _PLUGINS_LOADED:
         return
-    _PLUGINS_LOADED = True
     try:
         from aegisvault.extensions.registry import load_provider_plugins
 
         load_provider_plugins()
     except Exception:  # noqa: BLE001
         logger.warning("Failed to load provider plugins", exc_info=True)
+    finally:
+        _PLUGINS_LOADED = True
 
 
 def create_provider(connection: Connection) -> ModelProvider:

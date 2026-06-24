@@ -5,6 +5,7 @@ Security policy enforcement (e.g. trusted-local validation) lives in the
 orchestration layer that calls these primitives.
 """
 
+import os
 from pathlib import Path
 
 from aegisvault.api.schemas import ClassificationResult, EncryptResult
@@ -26,6 +27,18 @@ class VaultManager:
         self.vault_key = vault_key
         self.audit_logger = audit_logger
 
+    @staticmethod
+    def _sanitize_path_component(value: str, field_name: str) -> str:
+        """Sanitize a path component to prevent directory traversal."""
+        # Only keep the final component (basename), stripping any path separators
+        safe = Path(value).name
+        if not safe or safe == "." or safe == "..":
+            raise ValueError(f"Invalid {field_name}: {value!r} contains path traversal characters")
+        # Reject any remaining backslashes or null bytes
+        if "\\" in safe or "\x00" in safe:
+            raise ValueError(f"Invalid {field_name}: {value!r} contains forbidden characters")
+        return safe
+
     def encrypt(
         self,
         source: Path,
@@ -36,10 +49,22 @@ class VaultManager:
         salt = generate_salt()
         file_key = derive_file_key(self.vault_key, salt)
 
-        disguise_filename = f"{classification.disguise_name}.{classification.disguise_extension}"
-        category_dir = self.vault_path / classification.category
+        safe_category = self._sanitize_path_component(classification.category, "category")
+        safe_disguise_name = self._sanitize_path_component(
+            classification.disguise_name, "disguise_name"
+        )
+        safe_extension = self._sanitize_path_component(
+            classification.disguise_extension, "disguise_extension"
+        )
+        disguise_filename = f"{safe_disguise_name}.{safe_extension}"
+        category_dir = self.vault_path / safe_category
         category_dir.mkdir(parents=True, exist_ok=True)
         vault_path = category_dir / disguise_filename
+
+        if vault_path.exists():
+            suffix = os.urandom(4).hex()
+            disguise_filename = f"{safe_disguise_name}_{suffix}.{safe_extension}"
+            vault_path = category_dir / disguise_filename
 
         nonce = encrypt_file_stream(source, vault_path, file_key, salt)
 

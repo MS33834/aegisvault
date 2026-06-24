@@ -90,9 +90,14 @@ class ProcessingPipeline:
             self.task_store.update_state(task_id, TaskState.INDEXING)
             self._index(classification, result)
 
+            # Secure delete before marking complete so failures don't cause state regression
+            try:
+                self._secure_delete(event.source_path)
+            except OSError as exc:
+                logger.warning("Secure delete failed for %s: %s", event.source_path, exc)
+
             sm.transition(TaskState.COMPLETED)
             status = self.task_store.update_state(task_id, TaskState.COMPLETED)
-            self._secure_delete(event.source_path)
             return status
 
         except SecurityPolicyError as exc:

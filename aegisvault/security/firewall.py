@@ -58,12 +58,16 @@ def build_block_rule_command(process_path: Path) -> str:
 
 def build_remove_rule_command() -> str:
     """Build the Remove-NetFirewallRule command as a string."""
-    return f"Remove-NetFirewallRule -Name '{RULE_NAME}' -ErrorAction SilentlyContinue"
+    return (
+        f"Remove-NetFirewallRule "
+        f"-Name {_quote_ps_string(RULE_NAME)} "
+        f"-ErrorAction SilentlyContinue"
+    )
 
 
 def build_rule_exists_command() -> str:
     """Build the Get-NetFirewallRule existence check command."""
-    return f"Get-NetFirewallRule -Name '{RULE_NAME}' -ErrorAction SilentlyContinue"
+    return f"Get-NetFirewallRule -Name {_quote_ps_string(RULE_NAME)} -ErrorAction SilentlyContinue"
 
 
 def apply_block_rule(process_path: Path) -> None:

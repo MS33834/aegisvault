@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -49,11 +50,22 @@ class AuditLogger:
 
     def _load_or_create_key(self) -> bytes:
         key_path = self._key_path()
-        if key_path.exists():
+        try:
             return key_path.read_bytes()
+        except FileNotFoundError:
+            pass
         key = os.urandom(32)
-        key_path.write_bytes(key)
-        key_path.chmod(0o600)
+        try:
+            fd = os.open(
+                str(key_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError:
+            # Another process raced ahead and created the key.
+            return key_path.read_bytes()
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
         return key
 
     @property
@@ -103,6 +115,7 @@ class AuditLogger:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    logging.warning("Skipping corrupt audit log line %d", lineno)
                     continue
                 yield lineno, record
 
@@ -141,8 +154,9 @@ class AuditLogger:
         """
         invalid: list[int] = []
         for lineno, record in self._iter_records():
+            record = record.copy()
             stored_hmac = record.pop("hmac", None)
             expected = self._sign(record)
-            if stored_hmac != expected:
+            if not hmac.compare_digest(stored_hmac or "", expected):
                 invalid.append(lineno)
         return not invalid, invalid

@@ -66,10 +66,15 @@ class AegisConfig(BaseSettings):
         """Serialize the current configuration to *path* as JSON."""
         target = path or self.paths.settings
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(self.model_dump(mode="json"), indent=2, default=str),
-            encoding="utf-8",
-        )
+        data = self.model_dump(mode="json")
+        # Never persist secrets to disk in plaintext.
+        security = data.get("security", {})
+        security.pop("master_key_password", None)
+        security.pop("password_store_password", None)
+        content = json.dumps(data, indent=2, default=str)
+        tmp_path = target.with_suffix(".tmp")
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.replace(target)
 
     @classmethod
     def load_from_file(cls, path: Path | None = None) -> "AegisConfig":

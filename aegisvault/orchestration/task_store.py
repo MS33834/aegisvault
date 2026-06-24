@@ -1,6 +1,7 @@
 """SQLite-backed task context persistence."""
 
 import json
+import logging
 import math
 import sqlite3
 from collections.abc import Generator
@@ -13,6 +14,8 @@ from uuid import UUID
 from aegisvault.api.schemas import ClassificationResult, SearchResult, TaskStatus, TaskSummary
 from aegisvault.model.embedding import LocalEmbeddingProvider
 from aegisvault.orchestration.state_machine import TaskState
+
+logger = logging.getLogger(__name__)
 
 
 class TaskStore:
@@ -32,7 +35,7 @@ class TaskStore:
         The std-lib ``sqlite3.connect`` context manager only handles
         transactions; it does *not* close the connection on exit.
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         if row_factory is not None:
             conn.row_factory = row_factory
         try:
@@ -153,10 +156,12 @@ class TaskStore:
     def update_state(self, task_id: UUID, state: TaskState, message: str = "") -> TaskStatus:
         """Update task state."""
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "UPDATE tasks SET state = ?, message = ?, updated_at = ? WHERE task_id = ?",
                 (state.name, message, self._now(), str(task_id)),
             )
+            if cursor.rowcount == 0:
+                logger.warning("update_state: task %s not found", task_id)
             conn.commit()
         return TaskStatus(task_id=task_id, state=state.name, message=message)
 
@@ -326,7 +331,9 @@ class TaskStore:
     @staticmethod
     def _cosine_similarity(a: list[float], b: list[float]) -> float:
         """Compute cosine similarity between two vectors without numpy."""
-        dot = sum(x * y for x, y in zip(a, b, strict=False))
+        if len(a) != len(b):
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b, strict=True))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(x * x for x in b))
         if norm_a == 0 or norm_b == 0:
@@ -350,7 +357,7 @@ class TaskStore:
                 SELECT vault_path, category, summary, rank
                 FROM vault_fts
                 WHERE vault_fts MATCH ?
-                ORDER BY rank DESC
+                ORDER BY rank
                 LIMIT ?
                 """,
                 (match_expr, top_k),
@@ -360,7 +367,7 @@ class TaskStore:
                 vault_path=Path(row["vault_path"]),
                 category=row["category"],
                 summary=row["summary"],
-                score=float(row["rank"]),
+                score=1.0 / (1.0 + abs(float(row["rank"]))),
             )
             for row in rows
         ]

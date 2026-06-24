@@ -11,10 +11,15 @@ def load_plugins(group: str, register: Callable[[str, Any], None]) -> None:
     Each entry point is expected to be a no-argument callable that calls the
     provided ``register(name, factory)`` to register itself.
     """
+    import logging
+    logger = logging.getLogger(__name__)
     eps = entry_points()
     for ep in eps.select(group=group):
-        plugin: Callable[[Callable[[str, Any], None]], None] = ep.load()
-        plugin(register)
+        try:
+            plugin: Callable[[Callable[[str, Any], None]], None] = ep.load()
+            plugin(register)
+        except Exception:
+            logger.warning("Failed to load plugin %s", ep.name, exc_info=True)
 
 
 def load_provider_plugins() -> None:

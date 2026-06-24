@@ -23,10 +23,10 @@ class StateMachine:
     """Simple finite state machine for tasks."""
 
     ALLOWED_TRANSITIONS: ClassVar[dict[TaskState, set[TaskState]]] = {
-        TaskState.IDLE: {TaskState.CLASSIFYING},
+        TaskState.IDLE: {TaskState.CLASSIFYING, TaskState.FAILED, TaskState.QUARANTINED},
         TaskState.CLASSIFYING: {TaskState.ENCRYPTING, TaskState.QUARANTINED, TaskState.FAILED},
         TaskState.ENCRYPTING: {TaskState.INDEXING, TaskState.QUARANTINED, TaskState.FAILED},
-        TaskState.INDEXING: {TaskState.COMPLETED, TaskState.FAILED},
+        TaskState.INDEXING: {TaskState.COMPLETED, TaskState.QUARANTINED, TaskState.FAILED},
         TaskState.COMPLETED: set(),
         TaskState.FAILED: set(),
         TaskState.QUARANTINED: set(),
