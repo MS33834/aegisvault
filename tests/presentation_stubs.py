@@ -229,6 +229,7 @@ class FakeMessageBox:
     _last_warning: tuple[object, str, str] | None = None
     _last_information: tuple[object, str, str] | None = None
     _last_question: tuple[object, str, str] | None = None
+    _last_about: tuple[object, str, str] | None = None
 
     @classmethod
     def warning(cls, parent: object, title: str, text: str) -> None:
@@ -242,6 +243,10 @@ class FakeMessageBox:
     def question(cls, parent: object, title: str, text: str) -> int:
         cls._last_question = (parent, title, text)
         return cls.StandardButton.Yes
+
+    @classmethod
+    def about(cls, parent: object, title: str, text: str) -> None:
+        cls._last_about = (parent, title, text)
 
 
 class FakeLineEdit:
@@ -574,6 +579,29 @@ class FakeTextEdit:
         return self._text
 
 
+class FakeUrl:
+    """Stub QUrl for headless tests."""
+
+    opened_urls: list[str] = []
+
+    def __init__(self, url: str = "") -> None:
+        self._url = url
+
+    def toString(self) -> str:
+        return self._url
+
+
+class FakeDesktopServices:
+    """Stub QDesktopServices for headless tests."""
+
+    opened_urls: list[FakeUrl] = []
+
+    @classmethod
+    def openUrl(cls, url: FakeUrl) -> bool:
+        cls.opened_urls.append(url)
+        return True
+
+
 class FakeQt:
     """Stub Qt namespace for headless tests."""
 
@@ -605,8 +633,10 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_core = types.ModuleType("PyQt6.QtCore")
 
     fake_qt_gui.QAction = FakeAction
+    fake_qt_gui.QDesktopServices = FakeDesktopServices
 
     fake_qt_core.Qt = FakeQt
+    fake_qt_core.QUrl = FakeUrl
 
     fake_qt_widgets.QAbstractItemView = FakeAbstractItemView
     fake_qt_widgets.QApplication = FakeApplication

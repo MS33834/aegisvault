@@ -18,7 +18,9 @@ from aegisvault.orchestration.task_store import TaskStore
 from .presentation_stubs import (
     FakeAction,
     FakeApplication,
+    FakeDesktopServices,
     FakeMenu,
+    FakeMessageBox,
     install_presentation_stubs,
     restore_modules,
 )
@@ -358,29 +360,86 @@ def test_tray_run_builds_menu_and_execs(qt_stubs: None, config: AegisConfig) -> 
     assert any("About AegisVault" in text for text in texts)
 
 
-def test_tray_quick_action_handlers_print(
-    qt_stubs: None, config: AegisConfig, capsys: pytest.CaptureFixture[str]
+def test_tray_quick_action_handlers_invoke_real_behaviour(
+    qt_stubs: None, config: AegisConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Quick action handlers emit placeholder output."""
+    """Quick action handlers invoke real behaviour instead of printing placeholders."""
+    from aegisvault.presentation import tray as tray_module
     from aegisvault.presentation.tray import TrayApplication
 
+    # Reset shared stub state to avoid cross-test pollution.
+    FakeMessageBox._last_information = None
+    FakeMessageBox._last_about = None
+    FakeDesktopServices.opened_urls = []
+
+    opened_paths: list[Path] = []
+    monkeypatch.setattr(
+        TrayApplication,
+        "_open_path_in_file_manager",
+        staticmethod(lambda path: opened_paths.append(path)),
+    )
+
+    vault_browser_opened: list[tuple[object, object, object]] = []
+
+    class FakeVaultBrowser:
+        def __init__(self, task_store: object, vault_path: object, vault_key: object) -> None:
+            vault_browser_opened.append((task_store, vault_path, vault_key))
+
+        def exec(self) -> int:
+            return 1
+
+    monkeypatch.setattr(tray_module, "VaultBrowser", FakeVaultBrowser)
+
     tray = TrayApplication(config=config)
+
     tray._open_inbox()
     tray._open_vault()
-    tray._search_vault()
     tray._open_dashboard()
     tray._show_about()
     tray._open_docs()
     tray._open_task_center()
 
-    captured = capsys.readouterr().out
-    assert "Open Inbox" in captured
-    assert "Open Vault" in captured
-    assert "Search Vault" in captured
-    assert "Open Dashboard" in captured
-    assert "AegisVault v0.1.0" in captured
-    assert "Open documentation" in captured
-    assert "Open Task Center" in captured
+    # _open_inbox / _open_vault delegate to the file manager helper.
+    assert opened_paths == [config.paths.inbox, config.paths.vault]
+
+    # _open_dashboard shows an information dialog with task statistics.
+    assert FakeMessageBox._last_information is not None
+    _, dash_title, dash_text = FakeMessageBox._last_information
+    assert "Dashboard" in dash_title
+    assert "AegisVault Dashboard" in dash_text
+    assert "总计" in dash_text
+
+    # _show_about shows an About dialog referencing the version.
+    assert FakeMessageBox._last_about is not None
+    _, about_title, about_text = FakeMessageBox._last_about
+    assert "About AegisVault" in about_title
+    assert "0.1.0" in about_text
+
+    # _open_docs opens the documentation URL in the browser.
+    assert len(FakeDesktopServices.opened_urls) == 1
+    assert FakeDesktopServices.opened_urls[0].toString() == "https://github.com/MS33834/AegisVault"
+
+    # _open_task_center opens the Vault Browser.
+    assert len(vault_browser_opened) == 1
+    assert vault_browser_opened[0][0] is tray.task_store
+    assert vault_browser_opened[0][1] == config.paths.vault
+
+
+def test_tray_dashboard_without_task_store(
+    qt_stubs: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dashboard shows a not-configured message when no task store is available."""
+    from aegisvault.presentation.tray import TrayApplication
+
+    FakeMessageBox._last_information = None
+
+    tray = TrayApplication()
+    tray._open_dashboard()
+
+    assert FakeMessageBox._last_information is not None
+    _, title, text = FakeMessageBox._last_information
+    assert title == "Dashboard"
+    assert "not configured" in text
 
 
 def test_tray_activity_summary_text(qt_stubs: None, config: AegisConfig) -> None:

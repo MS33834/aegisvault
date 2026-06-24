@@ -224,18 +224,19 @@ class TrayApplication:
         return " · ".join(parts)
 
     def _open_inbox(self) -> None:
-        """Open the configured inbox directory."""
+        """Open the configured inbox directory in the file manager."""
         inbox = self.config.paths.inbox if self.config else Path.home() / "AegisVault" / "Inbox"
-        print(f"Open Inbox: {inbox}")  # noqa: T201
+        inbox.mkdir(parents=True, exist_ok=True)
+        self._open_path_in_file_manager(inbox)
 
     def _open_vault(self) -> None:
-        """Open the configured vault directory."""
+        """Open the configured vault directory in the file manager."""
         vault = self.config.paths.vault if self.config else Path.home() / "AegisVault" / "Vault"
-        print(f"Open Vault: {vault}")  # noqa: T201
+        vault.mkdir(parents=True, exist_ok=True)
+        self._open_path_in_file_manager(vault)
 
     def _search_vault(self) -> None:
         """Open the vault search dialog."""
-        print("Open Search Vault...")  # noqa: T201
         if self.config is not None:
             vault_path = self.config.paths.vault
         else:
@@ -244,16 +245,63 @@ class TrayApplication:
         dialog.exec()
 
     def _open_dashboard(self) -> None:
-        """Placeholder for dashboard UI."""
-        print("Open Dashboard...")  # noqa: T201
+        """Show a dashboard summary dialog with task statistics."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        if self.task_store is None:
+            QMessageBox.information(self.menu, "Dashboard", "Task store not configured.")
+            return
+
+        counts = self.task_store.counts_by_state()
+        total = sum(counts.values())
+        completed = counts.get(TaskState.COMPLETED.name, 0)
+        failed = counts.get(TaskState.FAILED.name, 0)
+        quarantined = counts.get(TaskState.QUARANTINED.name, 0)
+        active = total - completed - failed - quarantined
+
+        vault_size = self._vault_size_text()
+        local_ok = any(
+            conn.is_enabled and conn.is_trusted_local()
+            for conn in self.connection_manager.list_all()
+        )
+        conn_status = "✅ 本地连接正常" if local_ok else "⚠️ 未配置本地连接"
+
+        text = (
+            f"🔐 AegisVault Dashboard\n\n"
+            f"━━━ 任务统计 ━━━\n"
+            f"📋 总计: {total}\n"
+            f"⚙️ 进行中: {active}\n"
+            f"✅ 已完成: {completed}\n"
+            f"❌ 失败: {failed}\n"
+            f"⚠️ 隔离: {quarantined}\n\n"
+            f"━━━ 存储状态 ━━━\n"
+            f"📦 Vault 大小: {vault_size}\n"
+            f"🔌 连接状态: {conn_status}"
+        )
+        QMessageBox.information(self.menu, "📊 Dashboard", text)
 
     def _show_about(self) -> None:
-        """Placeholder for about dialog."""
-        print(f"AegisVault v{__version__} - Local private content management agent")  # noqa: T201
+        """Show the About dialog with version and description."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        text = (
+            f"<h3>🔐 AegisVault</h3>"
+            f"<p>Version {__version__}</p>"
+            f"<p>Local private content management agent.</p>"
+            f"<p>Inbox → Classify → Encrypt → Vault</p>"
+            f"<hr/>"
+            f"<p><small>AES-256-GCM encryption · Argon2id key derivation · "
+            f"Sandboxed execution · Offline verification</small></p>"
+        )
+        QMessageBox.about(self.menu, "About AegisVault", text)
 
     def _open_docs(self) -> None:
-        """Placeholder for documentation link."""
-        print("Open documentation...")  # noqa: T201
+        """Open the documentation in the default browser."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        url = QUrl("https://github.com/MS33834/AegisVault")
+        QDesktopServices.openUrl(url)
 
     def _refresh_header(self) -> None:
         """Update the header label with app name, version and status summary."""
@@ -451,8 +499,8 @@ class TrayApplication:
         return refresh_action
 
     def _open_task_center(self) -> None:
-        """Placeholder for the task center UI."""
-        print("Open Task Center...")  # noqa: T201
+        """Open the Vault Browser as the task center."""
+        self._open_vault_browser()
 
     def _open_connection_manager(self) -> None:
         """Open the platform connection manager dialog."""
@@ -475,6 +523,22 @@ class TrayApplication:
         )
         dialog = VaultBrowser(self.task_store, vault_path, self.vault_key)
         dialog.exec()
+
+    @staticmethod
+    def _open_path_in_file_manager(path: Path) -> None:
+        """Open *path* in the platform's default file manager."""
+        import sys
+
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            import subprocess
+
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            import subprocess
+
+            subprocess.run(["xdg-open", str(path)], check=False)
 
 
 class SearchVaultDialog(QDialog):

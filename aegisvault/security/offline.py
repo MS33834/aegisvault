@@ -6,6 +6,7 @@ AegisVault core process has no outbound (client-side) connections.
 
 import ctypes
 import ipaddress
+import os
 import re
 import socket
 import struct
@@ -99,10 +100,12 @@ def get_outbound_connections(
     """Return established outbound connections for a process.
 
     If pid is None, inspect the current process.
-    On Windows this currently returns an empty list as a placeholder.
+    On Linux, parses /proc/<pid>/net/tcp{,6}.
+    On Windows, uses GetExtendedTcpTable via ctypes.
+    On other platforms, returns an empty list.
     """
     if pid is None:
-        pid = sys.modules["os"].getpid()
+        pid = os.getpid()
     if sys.platform == "linux":
         return _parse_linux_tcp(pid, procfs_root=procfs_root)
     if sys.platform == "win32":

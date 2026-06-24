@@ -6,7 +6,7 @@ from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-# Placeholder constants for Phase 1.
+# Key lengths (bytes) for derived keys.
 VAULT_KEY_LEN = 32
 FILE_KEY_LEN = 32
 
