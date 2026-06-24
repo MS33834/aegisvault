@@ -30,6 +30,7 @@ class InboxEventHandler(FileSystemEventHandler):
             self.callback(file_event)
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Inbox watcher callback failed for %s", path)
 
     def on_moved(self, event: FileSystemEvent) -> None:
@@ -46,6 +47,7 @@ class InboxEventHandler(FileSystemEventHandler):
             self.callback(file_event)
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Inbox watcher callback failed for %s", path)
 
 

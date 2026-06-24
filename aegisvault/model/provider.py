@@ -55,11 +55,7 @@ class OpenAICompatibleProvider(ModelProvider):
         password = connection.password.get_secret_value()
         auth = (
             httpx.BasicAuth(connection.username, password)
-            if (
-                connection.auth_method == AuthMethod.BASIC
-                and connection.username
-                and password
-            )
+            if (connection.auth_method == AuthMethod.BASIC and connection.username and password)
             else None
         )
         self.client = httpx.AsyncClient(

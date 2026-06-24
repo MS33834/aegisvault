@@ -107,7 +107,7 @@ def test_vault_encrypt_does_not_require_connection(
         disguise_extension="log",
     )
 
-    result = manager.encrypt(source, classification, str(uuid4()))
+    result = manager.encrypt(source, classification, uuid4())
     assert result.vault_path.exists()
 
 
@@ -168,7 +168,7 @@ def test_vault_decrypt_logs_audit_event(
         disguise_extension="log",
     )
 
-    encrypt_result = manager.encrypt(source, classification, str(uuid4()))
+    encrypt_result = manager.encrypt(source, classification, uuid4())
     destination = tmp_path / "out.txt"
     manager.decrypt(encrypt_result.vault_path, encrypt_result.salt, destination)
 

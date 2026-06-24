@@ -425,9 +425,7 @@ def test_tray_quick_action_handlers_invoke_real_behaviour(
     assert vault_browser_opened[0][1] == config.paths.vault
 
 
-def test_tray_dashboard_without_task_store(
-    qt_stubs: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_tray_dashboard_without_task_store(qt_stubs: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Dashboard shows a not-configured message when no task store is available."""
     from aegisvault.presentation.tray import TrayApplication
 

@@ -94,6 +94,7 @@ class ConnectionManager:
 
         provider = self._create_provider(conn)
         try:
+
             async def _test() -> tuple[bool, str]:
                 try:
                     healthy = await provider.health()
@@ -104,6 +105,7 @@ class ConnectionManager:
                     return False, f"Error: {exc}"
                 finally:
                     await provider.close()
+
             return asyncio.run(_test())
         except RuntimeError:
             # Already in an async context - can't use asyncio.run
@@ -128,6 +130,7 @@ class ConnectionManager:
             raw = json.loads(self.storage_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             import logging
+
             logging.getLogger(__name__).warning(
                 "Failed to load connections from %s; starting with empty config",
                 self.storage_path,
@@ -140,8 +143,11 @@ class ConnectionManager:
                 self._connections[conn.id] = conn
             except Exception:
                 import logging
+
                 logging.getLogger(__name__).warning(
-                    "Skipping invalid connection entry: %s", item, exc_info=True,
+                    "Skipping invalid connection entry: %s",
+                    item,
+                    exc_info=True,
                 )
 
     def _save(self) -> None:

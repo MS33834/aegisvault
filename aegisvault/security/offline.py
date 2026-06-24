@@ -27,6 +27,8 @@ def _is_local_address(ip: str) -> bool:
         parsed = ipaddress.ip_address(ip.split("%", 1)[0])
     except ValueError:
         return False
+    if parsed.version == 6 and parsed.ipv4_mapped:
+        return parsed.ipv4_mapped.is_loopback or parsed.ipv4_mapped.is_unspecified
     return parsed.is_loopback or parsed.is_unspecified
 
 

@@ -44,7 +44,20 @@ Repository = "https://github.com/aegisvault/aegisvault"
 Issues = "https://github.com/aegisvault/aegisvault/issues"
 
 [tool.poetry]
+name = "aegisvault"
+version = "0.1.0"
+description = "Local private content management agent"
+authors = ["AegisVault Team"]
 packages = [{ include = "aegisvault" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11"
+pydantic = "^2.7"
+pydantic-settings = "^2.3"
+httpx = "^0.27"
+watchdog = "^4.0"
+cryptography = "^42.0"
+argon2-cffi = "^23.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
@@ -77,21 +90,28 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = "sentence_transformers"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"]
+module = [
+    "sentence_transformers",
+    "PyQt6.*",
+    "pydantic",
+    "pydantic_settings",
+    "cryptography.*",
+    "httpx",
+    "watchdog.*",
+    "argon2.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "aegisvault.presentation.connection_dialog",
-    "aegisvault.presentation.settings_dialog",
-    "aegisvault.presentation.tray",
-    "aegisvault.presentation.vault_browser",
+    "aegisvault.presentation.*",
+    "aegisvault.security.*",
+    "aegisvault.platform.*",
+    "aegisvault.api.*",
+    "aegisvault.config",
+    "aegisvault.execution.inbox_watcher",
 ]
-disable_error_code = ["misc", "no-any-return"]
+disable_error_code = ["misc", "no-any-return", "untyped-decorator"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

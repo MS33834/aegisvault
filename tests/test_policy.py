@@ -216,9 +216,7 @@ def test_enforce_sensitive_policy_rejects_unauthorized_cloud_fallback(
     )
     with pytest.raises(SecurityPolicyError):
         enforce_sensitive_policy(
-            SensitiveContext(
-                connection=cloud, config=config, audit_logger=audit, operation="test"
-            )
+            SensitiveContext(connection=cloud, config=config, audit_logger=audit, operation="test")
         )
 
     records = audit.query(event_type="policy_violation")

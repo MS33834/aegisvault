@@ -12,6 +12,7 @@ def load_plugins(group: str, register: Callable[[str, Any], None]) -> None:
     provided ``register(name, factory)`` to register itself.
     """
     import logging
+
     logger = logging.getLogger(__name__)
     eps = entry_points()
     for ep in eps.select(group=group):

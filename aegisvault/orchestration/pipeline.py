@@ -135,7 +135,7 @@ class ProcessingPipeline:
         encrypt_result = self.vault_manager.encrypt(
             source_path,
             classification,
-            str(task_id),
+            task_id,
         )
         if self.audit_logger is not None:
             self.audit_logger.log(

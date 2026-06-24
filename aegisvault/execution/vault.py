@@ -7,6 +7,7 @@ orchestration layer that calls these primitives.
 
 import os
 from pathlib import Path
+from uuid import UUID
 
 from aegisvault.api.schemas import ClassificationResult, EncryptResult
 from aegisvault.security.audit_log import AuditLogger
@@ -43,7 +44,7 @@ class VaultManager:
         self,
         source: Path,
         classification: ClassificationResult,
-        task_id: str,
+        task_id: UUID,
     ) -> EncryptResult:
         """Encrypt a file into the Vault."""
         salt = generate_salt()
@@ -69,7 +70,7 @@ class VaultManager:
         nonce = encrypt_file_stream(source, vault_path, file_key, salt)
 
         return EncryptResult(
-            task_id=task_id,  # type: ignore[arg-type]
+            task_id=task_id,
             vault_path=vault_path,
             salt=salt,
             nonce=nonce,
