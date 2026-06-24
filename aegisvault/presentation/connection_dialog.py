@@ -28,9 +28,10 @@ except ModuleNotFoundError as exc:
         "Install the GUI extra: pip install 'aegisvault[gui]'"
     ) from exc
 
+from pydantic import SecretStr
+
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import AuthMethod, Connection, PlatformType
-from pydantic import SecretStr
 
 
 class ConnectionEditDialog(QDialog):

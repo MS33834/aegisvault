@@ -28,6 +28,8 @@ ALLOWED_EVENT_TYPES: frozenset[str] = frozenset(
         "decrypted",
         "connection_tested",
         "policy_violation",
+        "offline_policy_violation",
+        "cloud_fallback_used",
         "login_attempt",
     }
 )

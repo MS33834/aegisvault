@@ -13,10 +13,12 @@ import pytest
 
 from aegisvault.security import offline as offline_module
 from aegisvault.security.offline import (
+    NetworkIsolationError,
     _is_local_address,
     _parse_linux_tcp,
     _parse_proc_net_addr,
     _parse_windows_tcp,
+    assert_no_outbound_connection,
     get_outbound_connections,
     has_outbound_connection,
 )
@@ -386,3 +388,28 @@ def test_has_outbound_connection_windows() -> None:
 def test_has_outbound_connection_unsupported() -> None:
     """Unsupported platforms return False."""
     assert not has_outbound_connection(pid=12345)
+
+
+def test_assert_no_outbound_connection_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """assert_no_outbound_connection raises when outbound traffic is present."""
+    monkeypatch.setattr(
+        offline_module,
+        "has_outbound_connection",
+        lambda *_args, **_kwargs: True,
+    )
+    with pytest.raises(NetworkIsolationError):
+        assert_no_outbound_connection()
+
+
+def test_assert_no_outbound_connection_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """assert_no_outbound_connection succeeds when no outbound traffic is present."""
+    monkeypatch.setattr(
+        offline_module,
+        "has_outbound_connection",
+        lambda *_args, **_kwargs: False,
+    )
+    assert_no_outbound_connection()

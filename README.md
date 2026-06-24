@@ -157,7 +157,9 @@ Writes are atomic: data is written to a temporary file and renamed into place. D
 
 ### Network policy
 
-Sensitive operations require a **trusted local connection** (`127.0.0.1`, `::1`, or `localhost`). Cloud providers are used only when the connection is explicitly marked `is_cloud_authorized=True` **and** the application has enabled cloud fallback.
+Sensitive operations require a **trusted local connection** (`127.0.0.1`, `::1`, or `localhost`). Cloud providers are used only when the connection is explicitly marked `is_cloud_authorized=True` **and** `security.cloud_fallback_enabled=True` is set.
+
+Optionally enable `security.enforce_offline_policy=True` to raise a `SecurityPolicyError` when sensitive operations are invoked while the process has active outbound client connections.
 
 ### Sandboxing
 
@@ -188,11 +190,12 @@ The CLI launches an `AegisAgent` that monitors the Inbox and processes files aut
 
 ## Container usage
 
-A headless Docker image is available. The GUI extra is excluded to keep the image small.
+A headless Docker image is available. The GUI extra is excluded to keep the image small, and the image runs as an unprivileged `aegisvault` user (UID 1000).
 
 ```bash
 docker build -t aegisvault .
 docker run --rm -it \
+  --user $(id -u):$(id -g) \
   -v /path/to/inbox:/inbox \
   -v /path/to/vault:/vault \
   -e AEGISVAULT_PATHS__INBOX=/inbox \
@@ -200,7 +203,10 @@ docker run --rm -it \
   aegisvault --no-tray
 ```
 
-**Note:** The Linux sandbox requires `bubblewrap`. To enable it inside the container, install `bubblewrap` in a derived image and ensure the container has the necessary privileges to create user namespaces.
+**Notes:**
+
+- `bubblewrap` is installed in the image, but the Linux sandbox requires the container runtime to allow user namespaces (`--security-opt seccomp=unconfined` or an equivalent policy).
+- Mount host directories with the same UID/GID as the container user (1000:1000) so the unprivileged process can read and write the Inbox and Vault.
 
 ---
 

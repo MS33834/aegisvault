@@ -9,6 +9,8 @@ from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.policy import (
     SecurityPolicyError,
+    SensitiveContext,
+    enforce_sensitive_policy,
     require_trusted_local_connection,
     sensitive_operation,
 )
@@ -165,3 +167,141 @@ def test_decorator_logs_policy_violation(tmp_path: Path) -> None:
     records = audit.query(event_type="policy_violation")
     assert len(records) == 1
     assert records[0]["details"]["connection_name"] == "Cloud"
+
+
+def _audit_fixture(tmp_path: Path) -> AuditLogger:
+    config = AegisConfig()
+    config.paths.logs = tmp_path / "logs"
+    return AuditLogger(config, hmac_key=b"k" * 32)
+
+
+def test_enforce_sensitive_policy_allows_cloud_fallback_when_authorized(
+    tmp_path: Path,
+) -> None:
+    """An authorised cloud connection is allowed when cloud fallback is enabled."""
+    audit = _audit_fixture(tmp_path)
+    config = AegisConfig()
+    config.security.cloud_fallback_enabled = True
+
+    cloud = Connection(
+        name="Authorized Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=True,
+    )
+    enforce_sensitive_policy(
+        SensitiveContext(connection=cloud, config=config, audit_logger=audit, operation="test")
+    )
+
+    records = audit.query(event_type="cloud_fallback_used")
+    assert len(records) == 1
+    assert records[0]["details"]["connection_name"] == "Authorized Cloud"
+
+
+def test_enforce_sensitive_policy_rejects_unauthorized_cloud_fallback(
+    tmp_path: Path,
+) -> None:
+    """Cloud fallback enabled but connection not authorised still raises."""
+    audit = _audit_fixture(tmp_path)
+    config = AegisConfig()
+    config.security.cloud_fallback_enabled = True
+
+    cloud = Connection(
+        name="Unauthorized Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=False,
+    )
+    with pytest.raises(SecurityPolicyError):
+        enforce_sensitive_policy(
+            SensitiveContext(
+                connection=cloud, config=config, audit_logger=audit, operation="test"
+            )
+        )
+
+    records = audit.query(event_type="policy_violation")
+    assert len(records) == 1
+
+
+def test_enforce_sensitive_policy_enforces_offline_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted local connection fails when outbound traffic is detected."""
+    audit = _audit_fixture(tmp_path)
+    config = AegisConfig()
+    config.security.enforce_offline_policy = True
+
+    local = Connection(
+        name="Local",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+    )
+    monkeypatch.setattr(
+        "aegisvault.security.offline.has_outbound_connection",
+        lambda **kwargs: True,
+    )
+
+    with pytest.raises(SecurityPolicyError, match="offline environment"):
+        enforce_sensitive_policy(
+            SensitiveContext(connection=local, config=config, audit_logger=audit, operation="test")
+        )
+
+    records = audit.query(event_type="offline_policy_violation")
+    assert len(records) == 1
+
+
+def test_enforce_sensitive_policy_allows_local_when_offline_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted local connection passes when no outbound traffic is detected."""
+    audit = _audit_fixture(tmp_path)
+    config = AegisConfig()
+    config.security.enforce_offline_policy = True
+
+    local = Connection(
+        name="Local",
+        platform_type=PlatformType.OLLAMA,
+        base_url="http://127.0.0.1:11434/v1",
+    )
+    monkeypatch.setattr(
+        "aegisvault.security.offline.has_outbound_connection",
+        lambda **kwargs: False,
+    )
+
+    enforce_sensitive_policy(
+        SensitiveContext(connection=local, config=config, audit_logger=audit, operation="test")
+    )
+    assert audit.query(event_type="offline_policy_violation") == []
+
+
+def test_decorator_uses_config_for_cloud_fallback() -> None:
+    """The decorator picks up AegisConfig and applies cloud fallback rules."""
+    config = AegisConfig()
+    config.security.cloud_fallback_enabled = True
+
+    @sensitive_operation
+    def _sensitive_work(conn: Connection, cfg: AegisConfig) -> str:
+        return "done"
+
+    authorized_cloud = Connection(
+        name="Authorized Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=True,
+    )
+    assert _sensitive_work(authorized_cloud, config) == "done"
+
+    unauthorized_cloud = Connection(
+        name="Unauthorized Cloud",
+        platform_type=PlatformType.OPENAI,
+        base_url="https://api.openai.com/v1",
+        is_local=False,
+        is_cloud_authorized=False,
+    )
+    with pytest.raises(SecurityPolicyError):
+        _sensitive_work(unauthorized_cloud, config)

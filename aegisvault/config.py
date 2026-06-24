@@ -32,6 +32,8 @@ class SecurityConfig(BaseSettings):
     enable_semantic_search: bool = False
     semantic_model: str = "all-MiniLM-L6-v2"
     sandbox_enabled: bool = False
+    cloud_fallback_enabled: bool = False
+    enforce_offline_policy: bool = False
     password_vault: str = "none"  # KeePassXC | pass | none
     password_store: str = "pass"  # pass | keepassxc | none
     password_store_database: Path | None = None  # KeePassXC database

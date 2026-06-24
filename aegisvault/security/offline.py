@@ -257,3 +257,24 @@ def has_outbound_connection(
                 continue
             return True
     return False
+
+
+class NetworkIsolationError(RuntimeError):
+    """Raised when the process is expected to be offline but has outbound connections."""
+
+
+def assert_no_outbound_connection(
+    pid: int | None = None,
+    procfs_root: Path | None = None,
+    *,
+    exclude_well_known_ports: bool = True,
+) -> None:
+    """Raise *NetworkIsolationError* if the process has outbound connections."""
+    if has_outbound_connection(
+        pid,
+        procfs_root=procfs_root,
+        exclude_well_known_ports=exclude_well_known_ports,
+    ):
+        raise NetworkIsolationError(
+            "Process has active outbound connections but network isolation was required."
+        )

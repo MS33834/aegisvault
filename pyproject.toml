@@ -80,6 +80,19 @@ warn_unused_configs = true
 module = "sentence_transformers"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "aegisvault.presentation.connection_dialog",
+    "aegisvault.presentation.settings_dialog",
+    "aegisvault.presentation.tray",
+    "aegisvault.presentation.vault_browser",
+]
+disable_error_code = ["misc", "no-any-return"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

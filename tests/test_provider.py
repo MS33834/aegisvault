@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from aegisvault.model.provider import (
     OpenAICompatibleProvider,
@@ -15,7 +16,6 @@ from aegisvault.model.provider import (
     register_provider,
 )
 from aegisvault.platform.models import AuthMethod, Connection, PlatformType
-from pydantic import SecretStr
 
 
 @pytest.fixture
