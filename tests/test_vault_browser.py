@@ -19,7 +19,9 @@ from aegisvault.orchestration.task_store import TaskStore
 
 from .presentation_stubs import (
     FakeApplication,
+    FakeIcon,
     FakeMessageBox,
+    FakeStyle,
     install_presentation_stubs,
     restore_modules,
 )
@@ -46,6 +48,9 @@ class _FakeDialogWithClose:
 
     def closeEvent(self, event: object) -> None:
         self._close_event_received = True
+
+    def style(self) -> FakeStyle:
+        return FakeStyle()
 
 
 class _FakeVaultManager:
@@ -555,3 +560,205 @@ def test_open_item_no_vault_manager_shows_warning(
     _, title, text = FakeMessageBox._last_warning
     assert title == "Open"
     assert "No vault key" in text
+
+
+def test_browser_toolbar_has_view_toggle_actions(qt_stubs: None, config: AegisConfig) -> None:
+    """Toolbar contains list and grid view toggle actions that are checkable."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    # Both view actions should exist and be checkable.
+    assert browser._view_list_action is not None
+    assert browser._view_grid_action is not None
+    assert browser._view_list_action._checkable is True
+    assert browser._view_grid_action._checkable is True
+    # List view should be checked by default.
+    assert browser._view_list_action._checked is True
+    assert browser._view_grid_action._checked is False
+
+
+def test_browser_set_view_switches_stack(qt_stubs: None, config: AegisConfig) -> None:
+    """_set_view toggles between list and grid pages in the view stack."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    # Default is list view (index 0).
+    assert browser._view_stack.currentIndex() == 0
+
+    # Switch to grid view.
+    browser._set_view("grid")
+    assert browser._view_stack.currentIndex() == 1
+    assert browser._view_list_action._checked is False
+    assert browser._view_grid_action._checked is True
+
+    # Switch back to list view.
+    browser._set_view("list")
+    assert browser._view_stack.currentIndex() == 0
+    assert browser._view_list_action._checked is True
+    assert browser._view_grid_action._checked is False
+
+
+def test_browser_sort_combo_changes_sort(qt_stubs: None, config: AegisConfig) -> None:
+    """Changing the sort combo updates the sort column and refreshes the table."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    # Default sort column is COL_NAME.
+    assert browser._sort_column == browser.COL_NAME
+
+    # Simulate selecting "Date" in the sort combo (index 1).
+    browser._sort_combo.setCurrentIndex(1)
+    assert browser._sort_column == browser.COL_TIMESTAMP
+
+    # Simulate selecting "Size" (index 2).
+    browser._sort_combo.setCurrentIndex(2)
+    assert browser._sort_column == browser.COL_SIZE
+
+    # Back to "Name" (index 0).
+    browser._sort_combo.setCurrentIndex(0)
+    assert browser._sort_column == browser.COL_NAME
+
+
+def test_browser_header_click_toggles_sort_order(qt_stubs: None, config: AegisConfig) -> None:
+    """Clicking a column header toggles sort order; clicking a new column resets to ascending."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    from PyQt6.QtCore import Qt
+
+    # Initially ascending by name.
+    assert browser._sort_column == browser.COL_NAME
+    assert browser._sort_order == Qt.SortOrder.AscendingOrder
+
+    # Click the same column header -> toggle to descending.
+    browser._header_clicked(browser.COL_NAME)
+    assert browser._sort_column == browser.COL_NAME
+    assert browser._sort_order == Qt.SortOrder.DescendingOrder
+
+    # Click again -> back to ascending.
+    browser._header_clicked(browser.COL_NAME)
+    assert browser._sort_column == browser.COL_NAME
+    assert browser._sort_order == Qt.SortOrder.AscendingOrder
+
+    # Click a different column -> ascending on new column.
+    browser._header_clicked(browser.COL_TIMESTAMP)
+    assert browser._sort_column == browser.COL_TIMESTAMP
+    assert browser._sort_order == Qt.SortOrder.AscendingOrder
+
+
+def test_browser_grid_view_populated(qt_stubs: None, config: AegisConfig) -> None:
+    """Grid (icon) view contains one item per completed task."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    for name in ("alpha", "beta", "gamma"):
+        cls_ = ClassificationResult(
+            sensitivity=SensitivityLevel.MEDIUM,
+            category="docs",
+            tags=[],
+            summary="",
+            disguise_name=name,
+            disguise_extension=".txt",
+        )
+        _make_completed(store, config, cls_)
+
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    # Grid should have one item per task.
+    assert len(browser._grid_list._items) == 3
+    grid_texts = [item._text for item in browser._grid_list._items]
+    assert any("alpha" in t for t in grid_texts)
+    assert any("beta" in t for t in grid_texts)
+    assert any("gamma" in t for t in grid_texts)
+
+
+def test_browser_sort_items_by_name(qt_stubs: None, config: AegisConfig) -> None:
+    """Table rows are sorted alphabetically by disguise name by default."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    for name in ("charlie", "alpha", "bravo"):
+        cls_ = ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="misc",
+            tags=[],
+            summary="",
+            disguise_name=name,
+            disguise_extension=".bin",
+        )
+        _make_completed(store, config, cls_)
+
+    browser = VaultBrowser(store, config.paths.vault, None)
+
+    names = [browser.file_table.item(r, 0).text() for r in range(browser.file_table._row_count)]
+    assert names == ["alpha", "bravo", "charlie"]
+
+
+def test_browser_category_filter_updates_grid(qt_stubs: None, config: AegisConfig) -> None:
+    """Selecting a category also filters the grid view."""
+    from aegisvault.presentation.vault_browser import VaultBrowser
+
+    VaultBrowser.__bases__ = (_FakeDialogWithClose,)
+
+    store = TaskStore(config.paths.index / "tasks.db")
+    _make_completed(
+        store,
+        config,
+        ClassificationResult(
+            sensitivity=SensitivityLevel.HIGH,
+            category="finance",
+            tags=[],
+            summary="",
+            disguise_name="tax_return",
+            disguise_extension=".bin",
+        ),
+    )
+    _make_completed(
+        store,
+        config,
+        ClassificationResult(
+            sensitivity=SensitivityLevel.LOW,
+            category="personal",
+            tags=[],
+            summary="",
+            disguise_name="grocery_list",
+            disguise_extension=".bin",
+        ),
+    )
+
+    browser = VaultBrowser(store, config.paths.vault, None)
+    assert len(browser._grid_list._items) == 2
+
+    # Filter to "finance" category.
+    finance_item = None
+    for tree_item in browser.category_tree._items:
+        if tree_item.text(0) == "finance":
+            finance_item = tree_item
+            break
+    assert finance_item is not None
+
+    browser.category_tree.setCurrentItem(finance_item)
+    browser.category_tree.emit_current_item_changed(finance_item)
+
+    assert len(browser._grid_list._items) == 1
+    assert "tax_return" in browser._grid_list._items[0]._text

@@ -27,6 +27,8 @@ class FakeAction:
         self.text = text
         self.parent = parent
         self.enabled = True
+        self._checkable = False
+        self._checked = False
         self.triggered = FakeSignal()
 
     def setEnabled(self, enabled: bool) -> None:
@@ -37,6 +39,15 @@ class FakeAction:
 
     def setToolTip(self, tooltip: str) -> None:
         self.tooltip = tooltip
+
+    def setCheckable(self, checkable: bool) -> None:
+        self._checkable = checkable
+
+    def setChecked(self, checked: bool) -> None:
+        self._checked = checked
+
+    def isChecked(self) -> bool:
+        return self._checked
 
 
 class FakeWidgetAction(FakeAction):
@@ -75,6 +86,9 @@ class FakeMenu:
 
     def clear(self) -> None:
         self.actions.clear()
+
+    def exec(self, _position: object = None) -> object:
+        return None
 
     def emit_about_to_show(self) -> None:
         for callback in self.aboutToShow.connected:
@@ -115,6 +129,7 @@ class FakeLabel:
 
     def __init__(self, text: str = "") -> None:
         self._text = _CallableStr(text)
+        self._pixmap: object | None = None
 
     @property
     def text(self) -> _CallableStr:
@@ -128,6 +143,16 @@ class FakeLabel:
 
     def setWordWrap(self, _enabled: bool) -> None:
         pass
+
+    def setMinimumSize(self, _w: int, _h: int) -> None:
+        pass
+
+    def setPixmap(self, pixmap: object) -> None:
+        self._pixmap = pixmap
+
+    def clear(self) -> None:
+        self._text = _CallableStr("")
+        self._pixmap = None
 
 
 class FakeSystemTrayIcon:
@@ -205,6 +230,9 @@ class FakeDialog:
 
     def reject(self) -> None:
         pass
+
+    def style(self) -> FakeStyle:
+        return FakeStyle()
 
 
 class FakeDialogButtonBox:
@@ -284,23 +312,49 @@ class FakeComboBox:
     def __init__(self) -> None:
         self._items: list[str] = []
         self._current = ""
+        self._current_index = 0
         self._editable = False
+        self._signals_blocked = False
+        self.currentIndexChanged = FakeSignal()
 
     def addItems(self, items: list[str]) -> None:
         self._items = list(items)
         if self._items and not self._current:
             self._current = self._items[0]
+            self._current_index = 0
 
     def addItem(self, text: str) -> None:
         self._items.append(text)
         if not self._current:
             self._current = text
+            self._current_index = 0
 
     def currentText(self) -> str:
         return self._current
 
     def setCurrentText(self, text: str) -> None:
         self._current = text
+        if text in self._items:
+            self._current_index = self._items.index(text)
+
+    def setCurrentIndex(self, index: int) -> None:
+        if 0 <= index < len(self._items):
+            self._current_index = index
+            self._current = self._items[index]
+            if not self._signals_blocked:
+                for callback in self.currentIndexChanged.connected:
+                    callback(index)
+
+    def currentIndex(self) -> int:
+        return self._current_index
+
+    def itemText(self, index: int) -> str:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return ""
+
+    def blockSignals(self, blocked: bool) -> None:
+        self._signals_blocked = blocked
 
     def setEditable(self, editable: bool) -> None:
         self._editable = editable
@@ -340,6 +394,17 @@ class FakePushButton:
     def __init__(self, text: str = "") -> None:
         self.text = text
         self.clicked = FakeSignal()
+        self._enabled = True
+        self._tooltip = ""
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+    def setToolTip(self, tooltip: str) -> None:
+        self._tooltip = tooltip
 
 
 class FakeTableWidgetItem:
@@ -349,6 +414,7 @@ class FakeTableWidgetItem:
         self._text = text
         self._row = -1
         self._column = -1
+        self._data: dict[int, object] = {}
 
     def text(self) -> str:
         return self._text
@@ -358,6 +424,12 @@ class FakeTableWidgetItem:
 
     def column(self) -> int:
         return self._column
+
+    def setData(self, role: int, value: object) -> None:
+        self._data[role] = value
+
+    def data(self, role: int) -> object:
+        return self._data.get(role)
 
 
 class FakeTableWidget:
@@ -369,6 +441,7 @@ class FakeTableWidget:
         self._row_count = 0
         self._items: dict[tuple[int, int], FakeTableWidgetItem] = {}
         self._selection_behavior = 0
+        self._selection_mode = 0
         self._edit_triggers = 0
         self._selected: list[FakeTableWidgetItem] = []
         self._header = FakeHeaderView()
@@ -398,6 +471,9 @@ class FakeTableWidget:
     def setSelectionBehavior(self, behavior: int) -> None:
         self._selection_behavior = behavior
 
+    def setSelectionMode(self, mode: int) -> None:
+        self._selection_mode = mode
+
     def setEditTriggers(self, triggers: int) -> None:
         self._edit_triggers = triggers
 
@@ -411,6 +487,9 @@ class FakeTableWidget:
 
     def item(self, row: int, column: int) -> FakeTableWidgetItem | None:
         return self._items.get((row, column))
+
+    def row(self, item: FakeTableWidgetItem) -> int:
+        return item._row
 
     def selectedItems(self) -> list[FakeTableWidgetItem]:
         return list(self._selected)
@@ -436,6 +515,9 @@ class FakeHeaderView:
     class ResizeMode:
         Stretch = 1
 
+    def __init__(self) -> None:
+        self.sectionClicked = FakeSignal()
+
     def setSectionResizeMode(self, _mode: int) -> None:
         pass
 
@@ -448,6 +530,11 @@ class FakeStyle:
         SP_DirIcon = 1
         SP_ComputerIcon = 2
         SP_DriveHDIcon = 3
+        SP_FileDialogDetailedView = 4
+        SP_FileDialogInfoView = 5
+
+    def standardIcon(self, _pixmap: int = 0) -> FakeIcon:
+        return FakeIcon()
 
 
 class FakeAbstractItemView:
@@ -455,6 +542,10 @@ class FakeAbstractItemView:
 
     class SelectionBehavior:
         SelectRows = 1
+
+    class SelectionMode:
+        SingleSelection = 0
+        ExtendedSelection = 1
 
     class EditTrigger:
         NoEditTriggers = 0
@@ -487,6 +578,9 @@ class FakeVBoxLayout:
         self._layouts.append(layout)
 
     def addStretch(self) -> None:
+        pass
+
+    def setContentsMargins(self, *_margins: int) -> None:
         pass
 
 
@@ -580,10 +674,16 @@ class FakeStackedWidget:
 class FakeListWidgetItem:
     """Stub QListWidgetItem for headless tests."""
 
-    def __init__(self, text: str = "", _parent: object | None = None) -> None:
-        self._text = text
-        self._icon: object | None = None
+    def __init__(self, icon_or_text: object = "", parent_or_text: object | None = None) -> None:
+        # Support both QListWidgetItem(str) and QListWidgetItem(QIcon, str)
+        if isinstance(icon_or_text, str):
+            self._text = icon_or_text
+            self._icon: object | None = None
+        else:
+            self._icon = icon_or_text
+            self._text = parent_or_text if isinstance(parent_or_text, str) else ""
         self._size_hint: tuple[int, int] | None = None
+        self._data: dict[int, object] = {}
 
     def setIcon(self, icon: object) -> None:
         self._icon = icon
@@ -591,13 +691,40 @@ class FakeListWidgetItem:
     def setSizeHint(self, size: object) -> None:
         self._size_hint = (size.width(), size.height())
 
+    def setData(self, role: int, value: object) -> None:
+        self._data[role] = value
+
+    def data(self, role: int) -> object:
+        return self._data.get(role)
+
 
 class FakeListWidget:
     """Stub QListWidget for headless tests."""
 
+    class ViewMode:
+        IconMode = 0
+        ListMode = 1
+
+    class ResizeMode:
+        Adjust = 0
+        Fixed = 1
+
+    class Movement:
+        Static = 0
+        Free = 1
+
     def __init__(self, _parent: object | None = None) -> None:
         self._items: list[FakeListWidgetItem] = []
+        self._selected: list[FakeListWidgetItem] = []
         self.itemDoubleClicked = FakeSignal()
+        self.itemSelectionChanged = FakeSignal()
+        self.customContextMenuRequested = FakeSignal()
+
+    def viewport(self) -> FakeListWidget:
+        return self
+
+    def mapToGlobal(self, _position: object) -> object:
+        return None
 
     def clear(self) -> None:
         self._items.clear()
@@ -611,6 +738,21 @@ class FakeListWidget:
     def setViewMode(self, _mode: object) -> None:
         pass
 
+    def setResizeMode(self, _mode: object) -> None:
+        pass
+
+    def setMovement(self, _mode: object) -> None:
+        pass
+
+    def setSelectionMode(self, _mode: object) -> None:
+        pass
+
+    def setContextMenuPolicy(self, _policy: object) -> None:
+        pass
+
+    def selectedItems(self) -> list[FakeListWidgetItem]:
+        return list(self._selected)
+
 
 class FakeToolBar:
     """Stub QToolBar for headless tests."""
@@ -618,6 +760,14 @@ class FakeToolBar:
     def __init__(self, _title: str = "") -> None:
         self._actions: list[object] = []
         self._movable = False
+
+    def addAction(self, icon_or_text: object, text: str | None = None) -> FakeAction:
+        if text is not None:
+            action = FakeAction(text)
+        else:
+            action = FakeAction(str(icon_or_text) if isinstance(icon_or_text, str) else "")
+        self._actions.append(action)
+        return action
 
     def addWidget(self, widget: object) -> None:
         self._actions.append(widget)
@@ -627,6 +777,9 @@ class FakeToolBar:
 
     def setMovable(self, movable: bool) -> None:
         self._movable = movable
+
+    def setIconSize(self, _size: object) -> None:
+        pass
 
 
 class FakeScrollArea:
@@ -668,8 +821,14 @@ class FakeTextEdit:
     def setReadOnly(self, read_only: bool) -> None:
         self._read_only = read_only
 
+    def setMaximumHeight(self, _height: int) -> None:
+        pass
+
     def toPlainText(self) -> str:
         return self._text
+
+    def clear(self) -> None:
+        self._text = ""
 
 
 class FakeUrl:
@@ -688,7 +847,7 @@ class FakeIcon:
     """Stub QIcon for headless tests."""
 
     @classmethod
-    def fromTheme(cls, _name: str) -> FakeIcon:
+    def fromTheme(cls, _name: str, _fallback: object | None = None) -> FakeIcon:
         return cls()
 
     def isNull(self) -> bool:
@@ -724,6 +883,7 @@ class FakeQt:
 
     class AlignmentFlag:
         AlignLeft = 1
+        AlignCenter = 4
 
     class Orientation:
         Horizontal = 1
@@ -731,6 +891,23 @@ class FakeQt:
 
     class ContextMenuPolicy:
         CustomContextMenu = 3
+
+    class SortOrder:
+        AscendingOrder = 0
+        DescendingOrder = 1
+
+    class ItemDataRole:
+        UserRole = 256
+
+    class AspectRatioMode:
+        KeepAspectRatio = 1
+
+    class TransformationMode:
+        SmoothTransformation = 1
+
+    class ItemFlag:
+        ItemIsSelectable = 1
+        ItemIsEnabled = 32
 
 
 class FakeQTimer:
@@ -759,6 +936,20 @@ class FakeQCloseEvent:
         return self._accepted
 
 
+class FakeQSize:
+    """Stub QSize for headless tests."""
+
+    def __init__(self, w: int = 0, h: int = 0) -> None:
+        self._w = w
+        self._h = h
+
+    def width(self) -> int:
+        return self._w
+
+    def height(self) -> int:
+        return self._h
+
+
 def install_presentation_stubs() -> dict[str, Any]:
     """Install fake PyQt6 modules and return the saved originals."""
     import sys
@@ -781,7 +972,7 @@ def install_presentation_stubs() -> dict[str, Any]:
     fake_qt_gui.QIcon = FakeIcon
     fake_qt_gui.QPixmap = FakePixmap
 
-    fake_qt_core.QSize = lambda w, h: type("Size", (), {"width": lambda: w, "height": lambda: h})()
+    fake_qt_core.QSize = FakeQSize
     fake_qt_core.Qt = FakeQt
     fake_qt_core.QTimer = FakeQTimer
     fake_qt_core.QUrl = FakeUrl
