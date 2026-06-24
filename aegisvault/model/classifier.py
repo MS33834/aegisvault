@@ -162,23 +162,105 @@ def _normalize_classification_data(data: dict[str, Any]) -> dict[str, Any]:
 
 
 CLASSIFICATION_PROMPT = """You are a private content classifier for AegisVault.
-Analyze the following file metadata and output ONLY a single valid JSON object.
-Do not include markdown code fences, explanations, or any text outside the JSON.
+Your task is to analyze file metadata and produce a structured classification.
+Output ONLY a single valid JSON object — no markdown fences, no explanations, no text outside JSON.
 
-Required JSON schema (all fields are required):
+All fields are required. The JSON schema:
 {{
   "sensitivity": "low|medium|high|critical",
-  "category": "finance|identity|media|work|health|other",
-  "tags": ["tag1", "tag2"],
-  "summary": "One sentence summary, sanitized to remove names/accounts/dates",
-  "disguise_name": "neutral_filename_without_extension",
-  "disguise_extension": "log|txt|csv|dat"
+  "category": "identity|finance|legal|media|documents|work|health|other",
+  "tags": ["tag1", "tag2", ...],
+  "summary": "one generic sentence, no identifiers",
+  "disguise_name": "neutral_lowercase_alphanumeric_no_extension",
+  "disguise_extension": "log|txt|csv|dat|bin"
 }}
 
-Guidelines:
-- If classification is uncertain, choose the safest (most sensitive) option.
-- Keep the summary generic and avoid reproducing sensitive identifiers.
-- disguise_name and disguise_extension will be used to store the file securely.
+---
+
+## SENSITIVITY RULES
+
+Critical — identity documents (ID cards, passports, driver's licenses, social security,
+          birth certificates), bank account numbers, credit card data, cryptographic keys.
+High     — legal contracts/agreements/NDAs, bank/financial statements,
+          payment confirmations, medical diagnoses, insurance policies, tax filings.
+Medium   — invoices, receipts, expense reports, lab results, HR correspondence, salary slips.
+Low      — generic photos/images, personal notes, screenshots, drafts,
+          reference documents, media files.
+
+## CATEGORY RULES
+
+identity  — National ID, passport, driver's license, visa, birth certificate,
+            social security card. Look for identity document keywords in
+            filename (e.g. "id_card", "passport", "身份证", "护照").
+finance   — Bank statements, payment records, invoices, receipts, tax returns,
+            expense sheets, credit reports. Look for financial keywords
+            (e.g. "statement", "账单", "发票").
+legal     — Contracts, agreements, NDAs, court documents, terms of service,
+            employment contracts. Look for legal keywords
+            (e.g. "contract", "合同", "agreement", "协议").
+media     — Photos, screenshots, audio, video, GIFs, wallpapers.
+            Typical image/video extensions.
+documents — Generic documents: notes, reports, memos, study materials, drafts,
+            spreadsheets with non-financial content.
+            Default category when no strong signal exists.
+work      — Resumes/CVs, cover letters, performance reviews, meeting minutes,
+            business correspondence.
+health    — Medical records, prescriptions, lab results, doctor's notes,
+            vaccination records.
+other     — Anything that does not fit the above categories.
+
+When uncertain between two categories, choose the specific one over "other" or "documents".
+
+## SUMMARY RULES
+
+- Write exactly ONE sentence in plain language — never more.
+- STRICTLY FORBIDDEN in summary: proper names, personal names, account numbers, ID numbers, dates,
+  physical addresses, email addresses, phone numbers, company names, bank names.
+- Replace sensitive specifics with generic descriptions:
+  BAD  — "Bank of China statement for Zhang Wei, March 2025"
+  GOOD — "A personal bank statement"
+  BAD  — "John Smith's passport scan from London office"
+  GOOD — "A passport identity document"
+- If the file extension alone sufficiently describes content, use that:
+  GOOD — "A digital photograph" (for .jpg/.png)
+  GOOD — "A spreadsheet file" (for .xlsx with non-financial content)
+
+## disguise_name RULES
+
+Purpose: conceal the original file identity when stored in the Vault.
+- Format: lowercase English letters (a-z) and digits (0-9) only.
+- Length: strictly 8–16 characters.
+- MUST contain at least one digit.
+- MUST NOT contain any reference to original content, filename, category, or sensitivity.
+- Generate unique-like patterns, for example: "file4a7f", "doc91x3m2", "rec5p9k", "item8b2n".
+- Never reuse the original filename, even partially.
+
+## disguise_extension RULES
+
+- Choose ONE from: "log", "txt", "csv", "dat", "bin".
+- Pick the most neutral option based on file type context:
+  - Text/spreadsheet originals → "csv" or "txt"
+  - Binary/image/PDF originals → "dat" or "bin"
+  - Unknown type → "log"
+- Must NOT match the original extension.
+
+## TAGS RULES
+
+- Provide 2–5 lowercase tags.
+- Use general categories and formats, never specific identifiers.
+- Examples:
+  identity  → ["identity", "id-card"] or ["identity", "passport"]
+  finance   → ["finance", "bank-statement"] or ["finance", "invoice"]
+  legal     → ["legal", "contract"] or ["legal", "nda"]
+  media     → ["photo", "screenshot"] or ["video", "recording"]
+  documents → ["document", "note"] or ["document", "report"]
+
+## FINAL CONSTRAINTS
+
+- Output EXACTLY one JSON object, nothing else — no wrappers, no preambles.
+- If the file purpose is truly uncertain: set sensitivity to "high" (err on the safe side),
+  category to "other", and tags to ["unclassified"].
+- Never invent details you cannot determine from the filename and size alone.
 
 File name: {filename}
 File size: {size} bytes
