@@ -18,38 +18,38 @@
 
 ## Phase 1: Core Pipeline（→ 100%）
 
-**当前进度**: ████████████░░░░ ~70%
+**当前进度**: ████████████████░ ~95%
 
 ### 已完成 ✅
 
 - [x] 文件监听（watchdog InboxWatcher）
-- [x] LLM 分类器（OpenAI-compatible Provider）
+- [x] LLM 分类器（OpenAI-compatible Provider，~8 类分类 prompt）
 - [x] AES-256-GCM 流式加密/解密（原子写入）
 - [x] 三级密钥层次（Master→Vault→File，Argon2id + HKDF-SHA256）
 - [x] SQLite FTS5 全文搜索
 - [x] NDJSON + HMAC-SHA256 审计日志
 - [x] PyQt6 系统托盘 + 连接/设置/保险库浏览器对话框
+- [x] Vault Browser 增强（文件预览、网格视图、排序、批量操作）
 - [x] JSON-RPC API + Pydantic Schema
 - [x] KeePassXC-cli / pass 密码管理器集成
 - [x] Windows DPAPI / TPM / Windows Hello 支持
 - [x] Linux bubblewrap 沙箱 + Windows AppContainer
 - [x] 网络防火墙出站拦截
 - [x] 离线策略检测与强制执行
+- [x] CLI 子命令（search/status/list）
+- [x] Docker 镜像 + docker-compose.yml
+- [x] PyPI 发布准备（pyproject.toml 完整、.pypirc 模板）
 - [x] CI/CD pipeline（lint / type / test / build）
+- [x] 用户安装使用文档（中文 USER_GUIDE.md）
+- [x] 分类 Prompt 优化（8 类，中文关键词提示）
 - [x] 414 个测试全部通过
 
-### 待完成（Phase 1 收尾）
+### 待完成
 
-| ID | 任务 | 优先级 | 预计工时 |
-|----|------|--------|----------|
-| 1.1 | **Docker 镜像构建与发布** | P0 | 2h |
-| 1.2 | **真实 LLM E2E 集成测试** | P0 | 4h |
-| 1.3 | **PyPI 发布准备**（setup.py/setup.cfg 补全） | P0 | 2h |
-| 1.4 | **CLI 子命令丰富化**（search/status/list/export） | P1 | 4h |
-| 1.5 | **Vault Browser 增强**（文件预览、排序、批量操作） | P1 | 6h |
-| 1.6 | **用户安装/使用文档** | P1 | 3h |
-| 1.7 | **首次运行引导向导** | P2 | 4h |
-| 1.8 | **分类模板/Prompt 优化** | P2 | 3h |
+| ID | 任务 | 优先级 | 状态 |
+|----|------|--------|------|
+| 1.7 | **首次运行引导向导** | P2 | 待开始 |
+| 1.2 | **真实 LLM E2E 集成测试** | P0 | 待开始 |
 
 ---
 
