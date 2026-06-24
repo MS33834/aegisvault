@@ -76,9 +76,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub.add_parser("status", help="Show agent status (inbox/vault counts, recent tasks)")
 
     list_parser = sub.add_parser("list", help="List vault files, optionally by category")
-    list_parser.add_argument(
-        "category", nargs="?", default=None, help="Filter by category name"
-    )
+    list_parser.add_argument("category", nargs="?", default=None, help="Filter by category name")
 
     return parser.parse_args(argv)
 
