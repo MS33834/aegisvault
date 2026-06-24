@@ -223,16 +223,20 @@ class LinuxSandboxRunner(SandboxRunner):
 class WindowsSandboxRunner(SandboxRunner):
     """Windows sandbox implementation using PowerShell and AppContainer.
 
-    On Windows 11 the runner spawns a low-integrity process inside an
-    AppContainer (LowBox token) via PowerShell. Network access is blocked with
-    the Windows Defender Firewall helper and the token is restricted to a small
-    set of capabilities. Filesystem access is limited to the Vault directory
-    (read-only) and an ephemeral working directory (writable).
+    WARNING: This implementation relies on the PowerShell cmdlets
+    ``New-AppContainerProfile`` and ``Add-AppContainerAllowedPath``. These
+    cmdlets are not part of the standard PowerShell distribution and are not
+    available on a stock Windows installation. On real Windows systems
+    ``run()`` will therefore fail at runtime unless the required modules are
+    installed. This runner is currently a placeholder; a production
+    implementation should use direct Win32 API calls (e.g. CreateAppContainerProfile,
+    CreateProcessAsUser with a LowBox token) via ctypes instead.
 
-    This implementation uses the PowerShell ``Invoke-Command`` / ``runas``
-    fallback so that no extra native dependencies are required. A future
-    enhancement can replace the PowerShell wrapper with direct Win32 API calls
-    via ctypes for finer-grained control.
+    On Windows 11 the runner attempts to spawn a low-integrity process inside
+    an AppContainer (LowBox token) via PowerShell. Network access is blocked
+    with the Windows Defender Firewall helper and the token is restricted to a
+    small set of capabilities. Filesystem access is limited to the Vault
+    directory (read-only) and an ephemeral working directory (writable).
     """
 
     @staticmethod
@@ -332,7 +336,12 @@ class WindowsSandboxRunner(SandboxRunner):
         extra_writable_paths: list[Path] | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run *command* inside a Windows AppContainer sandbox."""
+        """Run *command* inside a Windows AppContainer sandbox.
+
+        NOTE: This will fail on stock Windows because the required
+        ``New-AppContainerProfile`` and ``Add-AppContainerAllowedPath`` cmdlets
+        are not available in standard PowerShell.
+        """
         if not self.enabled:
             raise SandboxError("Sandbox execution is disabled (security.sandbox_enabled=false)")
 

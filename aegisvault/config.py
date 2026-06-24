@@ -1,10 +1,13 @@
 """Configuration management for AegisVault."""
 
 import json
+import logging
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class ModelConfig(BaseSettings):
@@ -78,11 +81,24 @@ class AegisConfig(BaseSettings):
 
     @classmethod
     def load_from_file(cls, path: Path | None = None) -> "AegisConfig":
-        """Load configuration from *path*, falling back to defaults."""
+        """Load configuration from *path*, falling back to defaults.
+
+        If the file is missing or contains invalid JSON, a default configuration
+        is returned and a warning is logged.
+        """
         target = path or (Path.home() / "AegisVault" / "Config" / "settings.json")
         if not target.exists():
+            logger.info("Settings file not found at %s; using defaults", target)
             return cls()
-        data = json.loads(target.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "Failed to load settings from %s: %s; using defaults",
+                target,
+                exc,
+            )
+            return cls()
         return cls(**data)
 
 

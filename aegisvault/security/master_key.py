@@ -16,6 +16,22 @@ from aegisvault.security.keytree import generate_salt
 
 logger = logging.getLogger(__name__)
 
+
+def _secure_zero(value: bytes | None) -> None:
+    """Best-effort overwrite of *value* with zeros.
+
+    bytes objects are immutable, so this zeros a temporary mutable copy and
+    then drops the reference. The original bytes will remain in memory until
+    garbage collected; clearing the reference is the best that can be done
+    from pure Python.
+    """
+    if value is None:
+        return
+    mutable = bytearray(value)
+    for i in range(len(mutable)):
+        mutable[i] = 0
+
+
 # Pluggable provider registry. Built-in providers are registered at import time;
 # downstream packages or tests can register additional providers at runtime.
 _REGISTRY: dict[str, type["MasterKeyProvider"]] = {}
@@ -51,6 +67,10 @@ class MasterKeyProvider(ABC):
     @abstractmethod
     def exists(self) -> bool:
         """Return True if the protected key material is already stored."""
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Clear any cached key material from memory."""
 
 
 class FilePasswordProvider(MasterKeyProvider):
@@ -158,6 +178,12 @@ class FilePasswordProvider(MasterKeyProvider):
             self._password_file is not None and self._password_file.exists()
         )
 
+    def clear(self) -> None:
+        """Clear any cached key material from memory."""
+        if self._key is not None:
+            _secure_zero(self._key)
+            self._key = None
+
 
 class DpapiMasterKeyProvider(MasterKeyProvider):
     """Windows DPAPI-backed master key provider.
@@ -197,6 +223,12 @@ class DpapiMasterKeyProvider(MasterKeyProvider):
     def exists(self) -> bool:
         """Return True if a protected master key file exists."""
         return self.storage_path.exists()
+
+    def clear(self) -> None:
+        """Clear any cached key material from memory."""
+        if self._key is not None:
+            _secure_zero(self._key)
+            self._key = None
 
     def _protect_and_store(self, key: bytes) -> None:
         from aegisvault.security.win_helpers import protect_data
@@ -270,6 +302,12 @@ class TpmMasterKeyProvider(MasterKeyProvider):
     def exists(self) -> bool:
         """Return True if the encrypted master-key blob exists."""
         return self.storage_path.exists()
+
+    def clear(self) -> None:
+        """Clear any cached key material from memory."""
+        if self._key is not None:
+            _secure_zero(self._key)
+            self._key = None
 
 
 def _derive_final_key(key_material: bytes, hello_salt: bytes | None) -> bytes:

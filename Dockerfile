@@ -5,6 +5,7 @@ WORKDIR /app
 # Install build dependencies for compiled wheels (cryptography, argon2-cffi).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        bubblewrap \
         gcc \
         libffi-dev \
         libssl-dev \

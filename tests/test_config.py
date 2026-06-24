@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 from aegisvault.config import AegisConfig
 
 
@@ -44,9 +42,9 @@ class TestAegisConfig:
     def test_load_from_file_corrupt_json(self, tmp_path):
         settings_path = tmp_path / "settings.json"
         settings_path.write_text("not valid json {{{", encoding="utf-8")
-        # Corrupt JSON is not tolerated; load raises rather than returning defaults.
-        with pytest.raises(json.JSONDecodeError):
-            AegisConfig.load_from_file(settings_path)
+        # Corrupt JSON falls back to defaults rather than crashing.
+        config = AegisConfig.load_from_file(settings_path)
+        assert isinstance(config, AegisConfig)
 
     def test_load_from_file_missing(self, tmp_path):
         settings_path = tmp_path / "nonexistent.json"

@@ -241,11 +241,19 @@ def _parse_windows_tcp(pid: int) -> list[tuple[str, int, str, int]]:
 def has_outbound_connection(
     pid: int | None = None,
     procfs_root: Path | None = None,
+    *,
+    exclude_well_known_ports: bool = True,
 ) -> bool:
-    """Return True if the process has any outbound (non-loopback) connection."""
-    for _local_ip, _local_port, remote_ip, _remote_port in get_outbound_connections(
+    """Return True if the process has active outbound (client) connections.
+
+    Connections whose local port is a well-known port (<= 1024) are treated as
+    server-side listeners and ignored when *exclude_well_known_ports* is True.
+    """
+    for _local_ip, local_port, remote_ip, _remote_port in get_outbound_connections(
         pid, procfs_root=procfs_root
     ):
         if not _is_local_address(remote_ip):
+            if exclude_well_known_ports and local_port <= 1024:
+                continue
             return True
     return False

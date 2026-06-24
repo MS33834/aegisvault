@@ -61,6 +61,7 @@ def test_cloud_connection_not_trusted_local(manager: ConnectionManager) -> None:
         ("http://127.0.0.1:11434", True),
         ("http://[::1]:11434", True),
         ("http://localhost:11434", True),
+        ("http://0.0.0.0:11434", False),
         ("http://192.168.1.10:11434", False),
         ("https://api.openai.com/v1", False),
         ("ftp://127.0.0.1:11434", False),

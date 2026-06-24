@@ -52,6 +52,9 @@ class FakeMasterKeyProvider(MasterKeyProvider):
     def exists(self) -> bool:
         return True
 
+    def clear(self) -> None:
+        pass
+
 
 class FakeTaskStore:
     """In-memory task store for injection tests."""

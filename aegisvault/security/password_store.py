@@ -55,7 +55,7 @@ class KeePassXCStore(PasswordStore):
             raise PasswordStoreError(f"{self.binary} not found on PATH")
 
     def _base_args(self) -> list[str]:
-        args = [self.binary]
+        args = [self.binary, "--pw-stdin"]
         if self.key_file is not None:
             args.extend(["--key-file", str(self.key_file)])
         args.append(str(self.database))
@@ -82,7 +82,7 @@ class KeePassXCStore(PasswordStore):
 
     def store(self, entry: str, password: str, **attrs: Any) -> None:
         """Store *password* under *entry* in the KeePassXC database."""
-        cmd = self._base_args() + ["edit", "--password-prompt", entry]
+        cmd = self._base_args() + ["edit", "-p", entry]
         # Sequence: database password, new password, confirmation.
         db_password = self.password or ""
         input_data = f"{db_password}\n{password}\n{password}\n"

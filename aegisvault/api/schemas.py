@@ -73,7 +73,7 @@ class SearchQuery(BaseModel):
     """Natural language search query."""
 
     query: str
-    top_k: int = 5
+    top_k: int = Field(default=5, ge=1, le=100)
 
 
 class SearchResult(BaseModel):

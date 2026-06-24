@@ -244,6 +244,20 @@ def test_get_outbound_connections_windows(monkeypatch: pytest.MonkeyPatch) -> No
     assert has_outbound_connection(pid=12345) is True
 
 
+def test_has_outbound_connection_ignores_well_known_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server-side connections on well-known ports are not treated as outbound."""
+    monkeypatch.setattr(
+        offline_module,
+        "get_outbound_connections",
+        lambda pid, procfs_root=None: [("0.0.0.0", 443, "8.8.8.8", 12345)],
+    )
+
+    assert has_outbound_connection(pid=12345) is False
+    assert has_outbound_connection(pid=12345, exclude_well_known_ports=False) is True
+
+
 def test_get_outbound_connections_unsupported_platform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

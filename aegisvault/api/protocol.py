@@ -3,7 +3,7 @@
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class JsonRpcRequest(BaseModel):
@@ -22,6 +22,15 @@ class JsonRpcResponse(BaseModel):
     id: str
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _result_or_error_exclusive(self) -> "JsonRpcResponse":
+        """Enforce JSON-RPC 2.0 rule that result and error are mutually exclusive."""
+        if self.result is not None and self.error is not None:
+            raise ValueError("result and error are mutually exclusive")
+        if self.result is None and self.error is None:
+            raise ValueError("response must contain either result or error")
+        return self
 
     @classmethod
     def success(cls, request_id: str | UUID, result: dict[str, Any]) -> "JsonRpcResponse":

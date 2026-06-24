@@ -2,6 +2,8 @@
 
 from uuid import UUID
 
+import pytest
+
 from aegisvault.api.protocol import JsonRpcRequest, JsonRpcResponse
 
 
@@ -43,3 +45,15 @@ def test_response_accepts_uuid_id() -> None:
     task_id = UUID("12345678-1234-1234-1234-123456789abc")
     resp = JsonRpcResponse.success(task_id, {"done": True})
     assert resp.id == str(task_id)
+
+
+def test_response_rejects_both_result_and_error() -> None:
+    """A response cannot contain both result and error."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        JsonRpcResponse(id="req-1", result={"ok": True}, error={"code": -1})
+
+
+def test_response_requires_result_or_error() -> None:
+    """A response must contain either result or error."""
+    with pytest.raises(ValueError, match="either result or error"):
+        JsonRpcResponse(id="req-1")

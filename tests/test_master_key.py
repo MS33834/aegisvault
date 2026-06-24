@@ -401,3 +401,28 @@ def test_factory_reuses_cached_dpapi_key(tmp_path: Path, monkeypatch: pytest.Mon
     assert provider.get_key() == b"decrypted-key"
     assert provider.get_key() == b"decrypted-key"
     mock_unprotect.assert_called_once_with(b"protected")
+
+
+def test_file_password_provider_clear_clears_cached_key(tmp_path: Path) -> None:
+    """clear() zeros the cached key and forces re-derivation on next get_key()."""
+    provider = FilePasswordProvider(password="hello-world", storage_path=tmp_path)
+    key = provider.get_key()
+    provider.clear()
+    assert provider._key is None
+    assert provider.get_key() == key
+
+
+def test_dpapi_provider_clear_clears_cached_key(tmp_path: Path) -> None:
+    """clear() zeros the cached DPAPI key."""
+    provider = DpapiMasterKeyProvider(storage_path=tmp_path / "master_key.bin")
+    provider._key = b"cached-key"
+    provider.clear()
+    assert provider._key is None
+
+
+def test_tpm_provider_clear_clears_cached_key(tmp_path: Path) -> None:
+    """clear() zeros the cached TPM key."""
+    provider = TpmMasterKeyProvider(storage_path=tmp_path / "tpm.bin")
+    provider._key = b"cached-key"
+    provider.clear()
+    assert provider._key is None

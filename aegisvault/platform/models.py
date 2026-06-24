@@ -85,4 +85,4 @@ class Connection(BaseModel):
             addr = ipaddress.ip_address(host)
         except ValueError:
             return False
-        return addr.is_loopback or addr.is_unspecified
+        return addr.is_loopback
