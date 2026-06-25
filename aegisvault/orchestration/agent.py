@@ -20,6 +20,7 @@ from aegisvault.security.master_key import (
     create_master_key_provider,
     should_rotate_key,
 )
+from aegisvault.security.password_store import SecretRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class AegisAgent:
         watcher: InboxWatcher | None = None,
         audit_logger: AuditLogger | None = None,
         embedding_provider: LocalEmbeddingProvider | None = None,
+        secret_retriever: SecretRetriever | None = None,
     ) -> None:
         self.config = config
         self.connection_manager = connection_manager or ConnectionManager(config.paths.connections)
@@ -69,6 +71,7 @@ class AegisAgent:
         )
         self.watcher = watcher
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.secret_retriever = secret_retriever
 
     def _check_key_rotation_due(self, config_dir: Path) -> None:
         """Log a warning if the master key is older than the recommended rotation age."""
@@ -202,6 +205,39 @@ class AegisAgent:
 
         semantic_results = await asyncio.to_thread(_semantic)
         return _merge_search_results(fts_results, semantic_results, top_k=query.top_k)
+
+    def fill_password(self, entry_path: str) -> bool:
+        """Fill a password for *entry_path* into the clipboard / active window.
+
+        Delegates to the configured ``SecretRetriever``.  Returns ``False``
+        when no retriever is configured or the fill operation fails.
+        """
+        if self.secret_retriever is None:
+            logger.warning(
+                "fill_password(%r) called but no SecretRetriever is configured",
+                entry_path,
+            )
+            return False
+        if hasattr(self.secret_retriever, "auto_fill"):
+            return bool(self.secret_retriever.auto_fill(entry_path))
+        # Fallback: copy password to clipboard via pyperclip or notify.
+        try:
+            password = self.secret_retriever.get(entry_path)
+            import subprocess as _sp
+            import sys as _sys
+
+            if _sys.platform == "darwin":
+                _sp.run(["pbcopy"], input=password, text=True, timeout=5)
+            elif _sys.platform == "linux":
+                for cmd in (["xclip", "-selection", "clipboard"], ["wl-copy"]):
+                    if __import__("shutil").which(cmd[0]):
+                        _sp.run(cmd, input=password, text=True, timeout=5)
+                        break
+            logger.info("Password for %r copied to clipboard", entry_path)
+            return True
+        except Exception:
+            logger.exception("fill_password failed for %r", entry_path)
+            return False
 
     async def aclose(self) -> None:
         """Clean up resources."""
