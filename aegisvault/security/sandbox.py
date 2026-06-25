@@ -271,9 +271,10 @@ class WindowsSandboxRunner(SandboxRunner):
     def _ps_quote(value: str) -> str:
         """Single-quote a value for PowerShell with full special-character escaping.
 
-        Escapes single-quotes (required within single-quoted strings) and
-        additionally escapes backticks, dollar signs, double quotes and
-        newlines as defense-in-depth against injection.
+        Escapes ``'`` (required within single-quoted strings) and additionally
+        escapes `` `` ` `` ``, ``$``, ``"`` and ``\\n`` as defense-in-depth
+        against injection. Callers may also use ``_ps_build_arg_list`` for
+        command arguments.
         """
         safe = value
         safe = safe.replace("`", "``")

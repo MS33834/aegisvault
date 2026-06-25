@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 from aegisvault.security.keytree import generate_salt
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from aegisvault.security.audit_log import AuditLogger
 
 logger = logging.getLogger(__name__)
@@ -575,12 +577,17 @@ def _re_encrypt_vault_files(
     old_vault_key: bytes,
     new_vault_key: bytes,
     audit_logger: "AuditLogger | None" = None,
+    progress_callback: "Callable[[int, int], None] | None" = None,
 ) -> int:
     """Re-encrypt every encrypted file under *vault_path* with the new vault key.
 
     Each file is decrypted with its current file key (old vault key + file salt),
     then re-encrypted with the new file key (new vault key + same file salt).
     The operation is atomic per file (temp file + rename).
+
+    If *progress_callback* is provided, it is called with ``(current, total)``
+    after each successfully re-encrypted file.  Useful for UI progress bars
+    during key rotation.
 
     Returns the number of files re-encrypted.
     """
@@ -596,6 +603,20 @@ def _re_encrypt_vault_files(
     # Vault stores encrypted files in category subdirectories.
     if not vault_path.exists() or not vault_path.is_dir():
         return 0
+
+    # Pre-count total files for progress reporting.
+    total_files = sum(
+        1
+        for category_dir in vault_path.iterdir()
+        if category_dir.is_dir()
+        for f in category_dir.iterdir()
+        if f.is_file()
+    )
+    if total_files == 0:
+        return 0
+
+    if progress_callback is not None:
+        progress_callback(0, total_files)
 
     for category_dir in sorted(vault_path.iterdir()):
         if not category_dir.is_dir():
@@ -659,6 +680,8 @@ def _re_encrypt_vault_files(
                 )
 
             count += 1
+            if progress_callback is not None:
+                progress_callback(count, total_files)
 
     return count
 

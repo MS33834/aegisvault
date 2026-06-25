@@ -69,7 +69,8 @@ pip install -e .
 # 构建镜像
 docker build -t aegisvault .
 
-# 运行容器（映射 Inbox 和 Vault 目录）
+# 运行容器（映射 Inbox、Vault 和配置目录）
+# 重要：Config 目录需包含 settings.json 配置文件
 docker run -d \
   -v ~/AegisVault/Inbox:/app/Inbox \
   -v ~/AegisVault/Vault:/app/Vault \

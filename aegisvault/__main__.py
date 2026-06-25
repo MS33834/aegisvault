@@ -27,10 +27,15 @@ def _master_key_storage_path(config: AegisConfig) -> Path:
 def _configure_logging(debug: bool) -> None:
     """Set up console logging."""
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    root = logging.getLogger()
+    if root.handlers:
+        root.setLevel(min(root.level, level))
+        logger.info("Logging already configured; adjusting level to %s", level)
+    else:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -262,7 +267,7 @@ def cmd_export(
             continue
         dest = output_dir / vault_path.name
         if dest.exists():
-            suffix = os.urandom(4).hex()
+            suffix = os.urandom(8).hex()
             dest = output_dir / f"{dest.stem}_{suffix}{dest.suffix}"
         try:
             vault_manager.decrypt(vault_path, item["salt"], dest)

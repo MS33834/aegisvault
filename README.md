@@ -207,6 +207,7 @@ docker run --rm -it \
 
 - `bubblewrap` is installed in the image, but the Linux sandbox requires the container runtime to allow user namespaces (`--security-opt seccomp=unconfined` or an equivalent policy).
 - Mount host directories with the same UID/GID as the container user (1000:1000) so the unprivileged process can read and write the Inbox and Vault.
+- The configuration directory (`~/.config/AegisVault/` inside the container) should be mounted if you need to persist settings across container restarts, or use environment variables (`AEGISVAULT_PATHS__INBOX`, etc.) instead.
 
 ---
 

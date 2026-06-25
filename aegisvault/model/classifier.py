@@ -97,6 +97,11 @@ SENSITIVE_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
+# Pre-computed lowercased keywords for performance.
+_SENSITIVE_KEYWORDS_LOWERED: dict[str, list[str]] = {
+    cat: [kw.lower() for kw in kws] for cat, kws in SENSITIVE_KEYWORDS.items()
+}
+
 # Mapping from keyword category to ClassificationResult category.
 _KEYWORD_CATEGORY_TO_CLASSIFICATION: dict[str, str] = {
     "identity": "identity",
@@ -218,11 +223,8 @@ def _match_keywords(filename_lower: str) -> tuple[str | None, int]:
     """
     best_category: str | None = None
     best_score = 0
-    for category, keywords in SENSITIVE_KEYWORDS.items():
-        score = 0
-        for kw in keywords:
-            if kw.lower() in filename_lower:
-                score += 1
+    for category, keywords_lower in _SENSITIVE_KEYWORDS_LOWERED.items():
+        score = sum(1 for kw in keywords_lower if kw in filename_lower)
         if score > best_score:
             best_score = score
             best_category = category
@@ -320,7 +322,12 @@ def pre_classify(file_path: Path) -> dict[str, Any] | None:
 
 
 def _generate_disguise_name(filename: str) -> str:
-    """Generate a deterministic disguise name from the filename hash."""
+    """Generate a deterministic disguise name from the filename hash.
+
+    Uses the first 8 hex characters of SHA-256 for a compact, stable
+    identifier. With ~4 billion possible values (32-bit space) the
+    collision probability is negligible for local vault sizes.
+    """
     digest = hashlib.sha256(filename.lower().encode()).hexdigest()[:8]
     # Ensure it contains at least one digit.
     return f"file{digest}"

@@ -133,6 +133,9 @@ AegisVault **不防御**以下威胁：
 
 #### TpmMasterKeyProvider (TPM 硬件)
 
+> **平台限制**: TPM Master Key Provider **仅支持 Windows**（需要 TPM 2.0 硬件）。
+> Linux/macOS 用户请使用 `FilePassword` 或 `DPAPI`（Windows 无感解锁）方案。
+
 ```
 第一次运行: 随机生成 32 bytes ──→ TPM RSA-2048 加密 ──→ 加密 blob
 后续运行: 加密 blob ──→ TPM RSA-2048 解密 ──→ [可选 HKDF] ──→ 主密钥

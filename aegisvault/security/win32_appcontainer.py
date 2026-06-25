@@ -33,6 +33,11 @@ ULONG_PTR = ctypes.c_ulonglong
 SIZE_T = ctypes.c_size_t
 LPVOID = ctypes.c_void_p
 INVALID_HANDLE_VALUE = HANDLE(-1).value
+# On 64-bit Python, c_void_p(-1).value returns the integral representation
+# of ((void *)-1) as a Python int (0xFFFFFFFFFFFFFFFF).  Assigning this back
+# into a HANDLE field of a ctypes struct correctly reproduces the Win32
+# INVALID_HANDLE_VALUE because ctypes truncation/promotion follows the
+# field's type rather than the Python int width.
 
 
 # ── Win32 constants ───────────────────────────────────────────────────

@@ -44,13 +44,14 @@
 - [x] 分类 Prompt 优化（8 类，中文关键词提示）
 - [x] CLI export 子命令（按分类/关键词解密导出）
 - [x] 解密临时文件自动清理（5 分钟延迟 + closeEvent 清理）
-- [x] 550 个测试全部通过（含 vault_browser/models/registry/vault 新增测试）
+- [x] 首次运行引导向导（FirstRunWizard，自动检测 settings.json 缺失）
+- [x] 714 个测试全部通过（含 vault_browser/models/registry/vault 新增测试）
+- [x] 代码质量打磨（ruff/mypy 零告警，13 个 LOW 问题全部修复）
 
 ### 待完成
 
 | ID | 任务 | 优先级 | 状态 |
 |----|------|--------|------|
-| 1.7 | **首次运行引导向导** | P2 | 延后至 Phase 2 |
 | 1.2 | **真实 LLM E2E 集成测试** | P0 | ⚠️ mock 完整，需真实 LLM 验证 |
 
 ---

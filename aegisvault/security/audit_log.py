@@ -358,6 +358,7 @@ class AuditLogger:
         by_severity: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0}
 
         timestamps: list[datetime] = []
+        _max_timestamps = 10_000  # protect against unbounded memory with large logs
 
         severity_map: dict[str, str] = {
             "decrypted": "CRITICAL",
@@ -384,7 +385,7 @@ class AuditLogger:
                 by_severity[severity] += 1
 
             ts = record.get("timestamp")
-            if ts:
+            if ts and len(timestamps) < _max_timestamps:
                 try:
                     record_ts = datetime.fromisoformat(str(ts))
                     timestamps.append(record_ts)

@@ -162,6 +162,7 @@ class VaultBrowser(QDialog):
         self.vault_manager = VaultManager(vault_path, vault_key) if vault_key else None
         self._items: list[dict[str, Any]] = []
         self._temp_files: list[Path] = []
+        self._cleanup_timers: list[QTimer] = []
 
         # ---- sorting state --------------------------------------------------
         self._sort_column = self.COL_NAME
@@ -716,10 +717,17 @@ class VaultBrowser(QDialog):
             self.vault_manager.decrypt(item["vault_path"], item["salt"], Path(dest))
             dest_path = Path(dest)
             self._temp_files.append(dest_path)
-            QTimer.singleShot(300_000, lambda p=dest_path: p.unlink(missing_ok=True))
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda p=dest_path: p.unlink(missing_ok=True))
+            timer.start(300_000)
+            self._cleanup_timers.append(timer)
             self.preview_text.setPlainText(f"Decrypted to:\n{dest}")
         except Exception as exc:
-            QMessageBox.warning(self, "Decrypt", f"Decrypt failed: {exc}")
+            logging.getLogger(__name__).warning(
+                "Decrypt failed for %s: %s", item["vault_path"], exc
+            )
+            QMessageBox.warning(self, "Decrypt", "Failed to decrypt the selected file.")
 
     def _open_item(self, item: dict[str, Any] | None) -> None:
         """Decrypt *item* and open it with the platform default application."""
@@ -734,13 +742,21 @@ class VaultBrowser(QDialog):
             self.vault_manager.decrypt(item["vault_path"], item["salt"], Path(dest))
             dest_path = Path(dest)
             self._temp_files.append(dest_path)
-            QTimer.singleShot(300_000, lambda p=dest_path: p.unlink(missing_ok=True))
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda p=dest_path: p.unlink(missing_ok=True))
+            timer.start(300_000)
+            self._cleanup_timers.append(timer)
             self._open_path(dest_path)
         except Exception as exc:
-            QMessageBox.warning(self, "Open", f"Open failed: {exc}")
+            logging.getLogger(__name__).warning("Open failed for %s: %s", item["vault_path"], exc)
+            QMessageBox.warning(self, "Open", "Failed to open the selected file.")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Clean up any remaining decrypted temp files."""
+        """Clean up any remaining decrypted temp files and scheduled cleanup timers."""
+        for timer in self._cleanup_timers:
+            timer.stop()
+        self._cleanup_timers.clear()
         for path in self._temp_files:
             path.unlink(missing_ok=True)
         self._temp_files.clear()
@@ -841,10 +857,13 @@ class VaultBrowser(QDialog):
                 item["vault_path"].unlink(missing_ok=True)
             except Exception as exc:
                 had_errors = True
+                logging.getLogger(__name__).warning(
+                    "Failed to delete %s: %s", item["vault_path"], exc
+                )
                 QMessageBox.warning(
                     self,
                     "Delete",
-                    f"Failed to delete {item['classification'].disguise_name}: {exc}",
+                    "Failed to delete an item. Check the log for details.",
                 )
 
         self._load_items()

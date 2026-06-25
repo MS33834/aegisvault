@@ -103,7 +103,7 @@ class PathsPage(QWizardPage):
         row = QHBoxLayout()
         row.addWidget(edit)
         btn = QPushButton("浏览...")
-        btn.clicked.connect(lambda checked: PathsPage._browse_dir(edit, caption))
+        btn.clicked.connect(lambda: PathsPage._browse_dir(edit, caption))
         row.addWidget(btn)
         return row
 

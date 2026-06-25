@@ -19,6 +19,7 @@ from aegisvault.orchestration.task_store import TaskStore
 from .presentation_stubs import (
     FakeApplication,
     FakeMessageBox,
+    FakeSignal,
     FakeStyle,
     install_presentation_stubs,
     restore_modules,
@@ -67,6 +68,20 @@ def _patch_extra_stubs() -> None:
     import sys
 
     class _FakeQTimer:
+        def __init__(self, parent: object | None = None) -> None:
+            self._parent = parent
+            self._single_shot = False
+            self.timeout = FakeSignal()
+
+        def setSingleShot(self, value: bool) -> None:
+            self._single_shot = value
+
+        def start(self, msec: int) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
         @staticmethod
         def singleShot(_msec: int, _callback: object) -> None:
             pass
