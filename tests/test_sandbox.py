@@ -343,3 +343,88 @@ def test_linux_runner_essential_paths_in_args(tmp_path: Path) -> None:
     assert "--ro-bind" in argv
     # The TMPDIR env var is set for hardened sandbox.
     assert "TMPDIR" in argv
+
+
+# ── MacOSSandboxRunner tests ─────────────────────────────────────────────────
+
+
+def test_macos_runner_can_be_instantiated(tmp_path: Path) -> None:
+    """MacOSSandboxRunner can be created on any platform."""
+    config = _enabled_config(tmp_path)
+    runner = get_sandbox_runner(config)
+    # On Linux this returns LinuxSandboxRunner; on darwin it returns
+    # MacOSSandboxRunner.  Either is acceptable here — we just ensure no crash.
+    assert isinstance(runner, SandboxRunner)
+    assert runner.enabled is True
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_macos_runner_run_on_non_darwin_raises(
+    tmp_path: Path, platform: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MacOSSandboxRunner.run raises SandboxError on non-macOS platforms."""
+    monkeypatch.setattr(sys, "platform", platform)
+    from aegisvault.security.sandbox import (
+        MacOSSandboxRunner,
+        SandboxError,
+    )
+
+    config = _enabled_config(tmp_path)
+    runner = MacOSSandboxRunner(config)
+    with pytest.raises(SandboxError, match="only available on macOS"):
+        runner.run(["/bin/echo", "hello"])
+
+
+def test_macos_runner_disabled_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """MacOSSandboxRunner raises SandboxError when disabled."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    from aegisvault.security.sandbox import MacOSSandboxRunner
+
+    config = AegisConfig()
+    config.security.sandbox_enabled = False
+    runner = MacOSSandboxRunner(config)
+    with pytest.raises(SandboxError, match="disabled"):
+        runner.run(["/bin/echo", "hello"])
+
+
+def test_macos_runner_builds_seatbelt_profile(tmp_path: Path) -> None:
+    """_build_seatbelt_profile generates a valid seatbelt profile string."""
+    from aegisvault.security.sandbox import MacOSSandboxRunner
+
+    config = _enabled_config(tmp_path)
+    runner = MacOSSandboxRunner(config)
+
+    profile = runner._build_seatbelt_profile(
+        tmp_path / "work",
+        extra_readonly_paths=[tmp_path / "extra_ro"],
+        extra_writable_paths=[tmp_path / "extra_rw"],
+    )
+
+    assert "(version 1)" in profile
+    assert "(deny default)" in profile
+    assert "(deny network*)" in profile
+    assert "(allow file-read* (subpath" in profile
+    assert str(runner.vault_dir) in profile
+    assert str(tmp_path / "work") in profile
+
+
+def test_macos_runner_get_runner_returns_macos_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_sandbox_runner returns MacOSSandboxRunner on darwin."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    from aegisvault.security.sandbox import MacOSSandboxRunner
+
+    config = _enabled_config(tmp_path)
+    runner = get_sandbox_runner(config)
+    assert isinstance(runner, MacOSSandboxRunner)
+
+
+def test_macos_runner_disabled_returns_false(tmp_path: Path) -> None:
+    """When disabled config is given, runner.enabled is False."""
+    from aegisvault.security.sandbox import MacOSSandboxRunner
+
+    config = AegisConfig()
+    config.security.sandbox_enabled = False
+    runner = MacOSSandboxRunner(config)
+    assert runner.enabled is False

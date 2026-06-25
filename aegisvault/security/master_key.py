@@ -4,10 +4,12 @@ A master key is the root secret from which the Vault Key is derived. Providers
 control how that root secret is obtained and protected.
 """
 
+import base64
 import contextlib
 import logging
 import os
 import stat
+import subprocess
 import sys
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
@@ -309,6 +311,126 @@ class TpmMasterKeyProvider(MasterKeyProvider):
     def exists(self) -> bool:
         """Return True if the encrypted master-key blob exists."""
         return self.storage_path.exists()
+
+    def clear(self) -> None:
+        """Clear any cached key material from memory."""
+        if self._key is not None:
+            _secure_zero(self._key)
+            self._key = None
+
+
+class KeychainMasterKeyProvider(MasterKeyProvider):
+    """macOS Keychain-backed master key provider.
+
+    Uses ``/usr/bin/security`` CLI to store and retrieve the master key
+    in the user's login keychain.  Key material is base64-encoded for
+    storage because the keychain does not support raw binary values.
+
+    On non-macOS platforms this provider can be instantiated and queried
+    (``exists()``), but ``get_key()`` raises ``NotImplementedError``.
+    This allows the same application code to run on Linux while selecting
+    a different provider.
+    """
+
+    def __init__(self, storage_path: Path, service_name: str = "AegisVault") -> None:
+        self.storage_path = storage_path
+        self.service_name = f"{service_name}.{storage_path.stem}"
+        self.account_name = "master_key"
+        self._key: bytes | None = None
+
+    def protect(self, key_material: bytes) -> None:
+        """Store *key_material* in the macOS login keychain.
+
+        The material is base64-encoded before storage because the
+        ``security`` CLI treats the password value as a UTF-8 string.
+        """
+        if sys.platform != "darwin":
+            raise NotImplementedError(
+                "Keychain is only available on macOS. "
+                "Use FilePasswordProvider or DPAPI on other platforms."
+            )
+        encoded = base64.b64encode(key_material).decode("ascii")
+        try:
+            subprocess.run(
+                [
+                    "/usr/bin/security",
+                    "add-generic-password",
+                    "-a",
+                    self.account_name,
+                    "-s",
+                    self.service_name,
+                    "-w",
+                    encoded,
+                    "-U",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to store master key in keychain: {exc.stderr.strip()}"
+            ) from exc
+
+    def unprotect(self) -> bytes:
+        """Retrieve the master key material from the macOS login keychain.
+
+        The stored base64 value is decoded back to raw bytes.
+        """
+        if sys.platform != "darwin":
+            raise NotImplementedError(
+                "Keychain is only available on macOS. "
+                "Use FilePasswordProvider or DPAPI on other platforms."
+            )
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/security",
+                    "find-generic-password",
+                    "-a",
+                    self.account_name,
+                    "-s",
+                    self.service_name,
+                    "-w",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return base64.b64decode(result.stdout.strip())
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to retrieve master key from keychain: {exc.stderr.strip()}"
+            ) from exc
+
+    def get_key(self) -> bytes:
+        """Return the master key, generating and protecting it if necessary."""
+        if self._key is not None:
+            return self._key
+        if not self.exists():
+            self._key = generate_salt()
+            self.protect(self._key)
+            return self._key
+        self._key = self.unprotect()
+        return self._key
+
+    def exists(self) -> bool:
+        """Return True if the master key is already stored in the keychain."""
+        if sys.platform != "darwin":
+            return False
+        result = subprocess.run(
+            [
+                "/usr/bin/security",
+                "find-generic-password",
+                "-a",
+                self.account_name,
+                "-s",
+                self.service_name,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
 
     def clear(self) -> None:
         """Clear any cached key material from memory."""
@@ -907,6 +1029,8 @@ def create_master_key_provider(
         return DpapiMasterKeyProvider(storage_path)
     if name == "tpm":
         return TpmMasterKeyProvider(storage_path, hello_salt=hello_salt)
+    if name == "mac-keychain":
+        return KeychainMasterKeyProvider(storage_path)
     provider_cls = _REGISTRY.get(name)
     if provider_cls is None:
         raise ValueError(f"Unknown master key provider: {provider_name}")
@@ -918,3 +1042,4 @@ def create_master_key_provider(
 register_provider("filepassword", FilePasswordProvider)
 register_provider("dpapi", DpapiMasterKeyProvider)
 register_provider("tpm", TpmMasterKeyProvider)
+register_provider("mac-keychain", KeychainMasterKeyProvider)

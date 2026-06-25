@@ -250,6 +250,158 @@ class LinuxSandboxRunner(SandboxRunner):
                 ) from exc
 
 
+class MacOSSandboxRunner(SandboxRunner):
+    """macOS sandbox implementation using ``sandbox-exec`` (Seatbelt).
+
+    Creates a custom Seatbelt profile that provides:
+      - Read-only access to the Vault directory and essential system paths.
+      - No network access (deny all socket operations).
+      - Writable temporary directory for scratch space.
+
+    On non-macOS platforms the runner can be instantiated but ``run()``
+    raises :class:`SandboxError`.
+    """
+
+    SANDBOX_EXEC: ClassVar[str] = "/usr/bin/sandbox-exec"
+
+    # Essential system paths exposed read-only inside the sandbox.
+    _ESSENTIAL_RO_PATHS: ClassVar[tuple[str, ...]] = (
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/Library",
+        "/System/Library",
+        "/private/var/db/dyld",
+    )
+
+    def _build_seatbelt_profile(
+        self,
+        temp_dir: Path,
+        extra_readonly_paths: list[Path] | None,
+        extra_writable_paths: list[Path] | None,
+    ) -> str:
+        """Build a seatbelt sandbox profile with minimal permissions.
+
+        The profile grants read-only access to the Vault directory and
+        essential system paths, writable access to the temporary directory,
+        and denies all network operations.
+        """
+        lines: list[str] = [
+            "(version 1)",
+            "(deny default)",
+            "",
+            ";; Allow basic process operations",
+            '(allow process-exec* process-fork (global-name "com.apple.securityd"))',
+            "",
+            ";; Vault directory — read-only",
+            f'(allow file-read* (subpath "{self.vault_dir}"))',
+            "",
+            ";; Temporary workspace — read-write",
+            f'(allow file-read* file-write* (subpath "{temp_dir}"))',
+            "",
+        ]
+
+        # Essential system paths (read-only).
+        for sys_path in self._ESSENTIAL_RO_PATHS:
+            if Path(sys_path).exists():
+                lines.append(
+                    f"(allow file-read* file-read-data file-issue-extension"
+                    f' (subpath "{sys_path}"))'
+                )
+
+        # Extra readonly paths.
+        if extra_readonly_paths:
+            for path in extra_readonly_paths:
+                if path.exists():
+                    lines.append(f'(allow file-read* (subpath "{path}"))')
+
+        # Extra writable paths.
+        if extra_writable_paths:
+            for path in extra_writable_paths:
+                path.mkdir(parents=True, exist_ok=True)
+                lines.append(f'(allow file-read* file-write* (subpath "{path}"))')
+
+        lines.append("")
+        # Deny all network operations for security.
+        lines.append(";; Deny network access")
+        lines.append("(deny network*)")
+
+        return "\n".join(lines)
+
+    def run(
+        self,
+        command: list[str],
+        *,
+        timeout: float | None = None,
+        check: bool = True,
+        input_data: bytes | None = None,
+        extra_readonly_paths: list[Path] | None = None,
+        extra_writable_paths: list[Path] | None = None,
+        env_vars: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run *command* inside a macOS seatbelt sandbox."""
+        if not self.enabled:
+            raise SandboxError("Sandbox execution is disabled (security.sandbox_enabled=false)")
+
+        if sys.platform != "darwin":
+            raise SandboxError(
+                "macOS sandbox-exec is only available on macOS. "
+                "Use LinuxSandboxRunner or WindowsSandboxRunner on this platform."
+            )
+
+        sandbox_exec = shutil.which(self.SANDBOX_EXEC)
+        if sandbox_exec is None:
+            raise SandboxError(
+                "sandbox-exec binary not found. It should be present at "
+                f"{self.SANDBOX_EXEC} on macOS."
+            )
+
+        self._ensure_vault_dir()
+        resolved = self._resolve_command(command)
+
+        with tempfile.TemporaryDirectory(prefix="aegisvault-sandbox-") as tmp:
+            temp_path = Path(tmp)
+
+            # Write the seatbelt profile to a temporary file.
+            profile_content = self._build_seatbelt_profile(
+                temp_path,
+                extra_readonly_paths,
+                extra_writable_paths,
+            )
+            profile_path = temp_path / "seatbelt.sb"
+            profile_path.write_text(profile_content, encoding="utf-8")
+
+            # Set environment: HOME and TMPDIR point into sandbox temp.
+            env: dict[str, str] = {
+                "HOME": str(temp_path),
+                "TMPDIR": str(temp_path),
+            }
+            if env_vars:
+                for key, value in env_vars.items():
+                    if key not in _RESERVED_ENV_KEYS and _ENV_KEY_PATTERN.match(key):
+                        env[key] = value
+
+            argv = [sandbox_exec, "-f", str(profile_path), "--", *resolved]
+            try:
+                return subprocess.run(
+                    argv,
+                    input=input_data,
+                    capture_output=True,
+                    text=True,
+                    check=check,
+                    timeout=timeout,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SandboxError(
+                    f"Sandboxed command timed out after {timeout}s: {' '.join(command)}"
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                raise SandboxError(
+                    f"Sandboxed command failed ({exc.returncode}): {exc.stderr.strip()}"
+                ) from exc
+
+
 class WindowsSandboxRunner(SandboxRunner):
     """Windows sandbox implementation using Win32 AppContainer APIs.
 
@@ -553,4 +705,6 @@ def get_sandbox_runner(config: AegisConfig) -> SandboxRunner:
     """Return a platform-appropriate sandbox runner for *config*."""
     if sys.platform == "win32":
         return WindowsSandboxRunner(config)
+    if sys.platform == "darwin":
+        return MacOSSandboxRunner(config)
     return LinuxSandboxRunner(config)

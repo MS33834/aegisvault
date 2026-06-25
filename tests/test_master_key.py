@@ -12,6 +12,7 @@ from aegisvault.security.master_key import (
     _REGISTRY,
     DpapiMasterKeyProvider,
     FilePasswordProvider,
+    KeychainMasterKeyProvider,
     TpmMasterKeyProvider,
     _derive_final_key,
     create_master_key_provider,
@@ -426,3 +427,125 @@ def test_tpm_provider_clear_clears_cached_key(tmp_path: Path) -> None:
     provider._key = b"cached-key"
     provider.clear()
     assert provider._key is None
+
+
+# ── KeychainMasterKeyProvider tests ───────────────────────────────────────────
+
+
+def test_keychain_provider_can_be_instantiated_on_linux(tmp_path: Path) -> None:
+    """Keychain provider is safe to construct on non-macOS platforms."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    assert not provider.exists()
+    assert provider.service_name == "AegisVault.keychain"
+    assert provider.account_name == "master_key"
+
+
+def test_keychain_provider_exists_on_linux_returns_false(tmp_path: Path) -> None:
+    """On Linux exists() always returns False (no keychain CLI)."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    assert provider.exists() is False
+
+
+def test_keychain_provider_get_key_on_linux_raises(tmp_path: Path) -> None:
+    """Keychain provider raises NotImplementedError on Linux."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    with pytest.raises(NotImplementedError, match="only available on macOS"):
+        provider.get_key()
+
+
+def test_keychain_provider_protect_on_linux_raises(tmp_path: Path) -> None:
+    """protect() raises NotImplementedError on Linux."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    with pytest.raises(NotImplementedError, match="only available on macOS"):
+        provider.protect(b"test-key-material-32bytes-here!")
+
+
+def test_keychain_provider_unprotect_on_linux_raises(tmp_path: Path) -> None:
+    """unprotect() raises NotImplementedError on Linux."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    with pytest.raises(NotImplementedError, match="only available on macOS"):
+        provider.unprotect()
+
+
+def test_keychain_provider_clear_clears_cached_key(tmp_path: Path) -> None:
+    """clear() zeros the cached keychain key."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+    provider._key = b"cached-key"
+    provider.clear()
+    assert provider._key is None
+
+
+def test_keychain_provider_generates_and_protects_new_key_on_darwin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On macOS a missing keychain entry triggers key generation and protection."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+
+    protected: list[bytes] = []
+
+    def fake_protect(key_material: bytes) -> None:
+        protected.append(key_material)
+
+    monkeypatch.setattr(provider, "protect", fake_protect)
+    # Force platform to darwin so get_key() proceeds past the platform check.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    # exists() returns False to trigger generation.
+    monkeypatch.setattr(provider, "exists", lambda: False)
+
+    key = provider.get_key()
+    assert len(key) == 32
+    assert len(protected) == 1
+    assert protected[0] == key
+
+
+def test_keychain_provider_get_key_caches_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keychain provider caches the decrypted key in memory."""
+    provider = KeychainMasterKeyProvider(tmp_path / "keychain.bin")
+
+    call_count = 0
+
+    def fake_unprotect() -> bytes:
+        nonlocal call_count
+        call_count += 1
+        return b"decrypted-key-material!!!!-----"
+
+    monkeypatch.setattr(provider, "unprotect", fake_unprotect)
+    monkeypatch.setattr(provider, "exists", lambda: True)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    key1 = provider.get_key()
+    key2 = provider.get_key()
+    assert key1 == key2
+    assert call_count == 1
+
+
+def test_keychain_provider_service_name_default(tmp_path: Path) -> None:
+    """Default service_name uses 'AegisVault' prefix."""
+    provider = KeychainMasterKeyProvider(tmp_path / "my_vault.bin")
+    assert provider.service_name == "AegisVault.my_vault"
+
+
+def test_keychain_provider_service_name_custom(tmp_path: Path) -> None:
+    """Custom service_name is respected."""
+    provider = KeychainMasterKeyProvider(tmp_path / "my_vault.bin", service_name="MyApp")
+    assert provider.service_name == "MyApp.my_vault"
+
+
+def test_factory_creates_keychain_provider(tmp_path: Path) -> None:
+    """Factory returns KeychainMasterKeyProvider for 'mac-keychain'."""
+    kc = create_master_key_provider("mac-keychain", tmp_path / "kc.bin")
+    assert isinstance(kc, KeychainMasterKeyProvider)
+
+    # Case-insensitive lookup.
+    kc2 = create_master_key_provider("Mac-Keychain", tmp_path / "kc2.bin")
+    assert isinstance(kc2, KeychainMasterKeyProvider)
+
+
+def test_keychain_provider_registered_in_factory(tmp_path: Path) -> None:
+    """Keychain provider is in the registered providers registry."""
+    assert "mac-keychain" in get_registered_providers()
+    assert get_registered_providers()["mac-keychain"] is KeychainMasterKeyProvider

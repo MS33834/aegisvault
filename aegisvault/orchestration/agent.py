@@ -40,6 +40,7 @@ class AegisAgent:
         audit_logger: AuditLogger | None = None,
         embedding_provider: LocalEmbeddingProvider | None = None,
         secret_retriever: SecretRetriever | None = None,
+        notifier: object | None = None,
     ) -> None:
         self.config = config
         self.connection_manager = connection_manager or ConnectionManager(config.paths.connections)
@@ -72,6 +73,7 @@ class AegisAgent:
         self.watcher = watcher
         self._loop: asyncio.AbstractEventLoop | None = None
         self.secret_retriever = secret_retriever
+        self._notifier = notifier
 
     def _check_key_rotation_due(self, config_dir: Path) -> None:
         """Log a warning if the master key is older than the recommended rotation age."""
@@ -133,8 +135,15 @@ class AegisAgent:
         """Process a file event and log failures."""
         try:
             await self.on_file_event(event)
-        except Exception:
+            if self._notifier is not None and hasattr(self._notifier, "notify_classification_done"):
+                self._notifier.notify_classification_done(str(event.source_path.name))
+        except Exception as exc:
             logger.exception("Failed to process file event %s", event.event_id)
+            if self._notifier is not None and hasattr(self._notifier, "notify_security_alert"):
+                self._notifier.notify_security_alert(
+                    "processing_failure",
+                    f"Failed to process '{event.source_path.name}': {exc}",
+                )
 
     def start_monitoring(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         """Start watching the configured Inbox directory."""

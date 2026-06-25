@@ -96,6 +96,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     export_parser.add_argument("--category", default=None, help="Filter by category name")
     export_parser.add_argument("--query", default=None, help="Search query to filter files")
 
+    serve_parser = sub.add_parser("serve", help="Start the AegisVault API server")
+    serve_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address (default: 127.0.0.1 for local-only access)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="TCP port to listen on (default: 8000)",
+    )
+    serve_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload for development",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -280,6 +298,28 @@ def cmd_export(
     return 0
 
 
+def cmd_serve(
+    agent: AegisAgent,
+    config: AegisConfig,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = False,
+) -> int:
+    """Start the AegisVault API server."""
+    from aegisvault.api.server import is_available, run_server
+
+    if not is_available():
+        print(
+            "FastAPI is required for the API server. "
+            "Install it with: pip install aegisvault[server]",
+            file=sys.stderr,
+        )
+        return 1
+
+    run_server(config, agent, host=host, port=port, reload=reload)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Existing monitoring / tray logic (unchanged)
 # ---------------------------------------------------------------------------
@@ -385,6 +425,14 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_list(agent, args.category)
         elif args.command == "export":
             return cmd_export(agent, config, args.output_dir, args.category, args.query)
+        elif args.command == "serve":
+            return cmd_serve(
+                agent,
+                config,
+                host=args.host,
+                port=args.port,
+                reload=args.reload,
+            )
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
