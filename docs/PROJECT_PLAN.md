@@ -55,19 +55,27 @@
 
 ---
 
-## Phase 2: Hardened Security（0%）
+## Phase 2: Hardened Security（100% ✅）
 
 **目标**: 安全基础设施从"可用"到"生产级"
 
-| ID | 任务 | 优先级 | 预计工时 |
-|----|------|--------|----------|
-| 2.1 | **bubblewrap 沙箱生产落地**（实际隔离运行） | P0 | 8h |
-| 2.2 | **Windows AppContainer 改用 Win32 API**（替换 PowerShell） | P0 | 8h |
-| 2.3 | **KeePassXC API 深度集成**（密码自动填充、条目管理） | P1 | 6h |
-| 2.4 | **审计日志实时告警与导出** | P1 | 4h |
-| 2.5 | **主密钥轮换策略**（周期性自动轮换） | P1 | 6h |
-| 2.6 | **敏感文件类型检测扩展**（身份证、合同、凭证自动识别） | P2 | 6h |
-| 2.7 | **安全白皮书 v1.0** | P2 | 4h |
+| ID | 任务 | 优先级 | 状态 |
+|----|------|--------|------|
+| 2.1 | **bubblewrap 沙箱生产落地**（tmpfs root、全命名空间隔离、seccomp） | P0 | ✅ |
+| 2.2 | **Windows AppContainer 改用 Win32 API**（ctypes LowBox 进程） | P0 | ✅ |
+| 2.3 | **KeePassXC API 深度集成**（密码自动填充、CRUD、条目管理） | P1 | ✅ |
+| 2.4 | **审计日志实时告警与导出**（CRITICAL/HIGH/MEDIUM 告警、NDJSON/CSV） | P1 | ✅ |
+| 2.5 | **主密钥轮换策略**（rotate/emergency/90天自检） | P1 | ✅ |
+| 2.6 | **敏感文件类型检测扩展**（5类关键词、pre_classify 前置过滤） | P2 | ✅ |
+| 2.7 | **安全白皮书 v1.0**（威胁模型、密钥架构、加密、隔离、审计） | P2 | ✅ |
+
+### Phase 2 Review 修复
+
+| 级别 | 数量 | 关键修复 |
+|------|------|----------|
+| CRITICAL | 4 | NameError in rotate handler, bare except, thread-unsafe init, API export |
+| HIGH | 4 | Vault key hash removal, Win32 type fix, docs sync |
+| MEDIUM | 11 | Broad exceptions → narrow, PowerShell escape, docs filename fix |
 
 ---
 
