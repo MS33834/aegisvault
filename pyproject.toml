@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["pyqt6>=6.7,<7.0"]
 semantic = ["sentence-transformers>=3.0,<4.0"]
+sync = ["zeroconf>=0.130,<1.0"]
 
 [project.scripts]
 aegisvault = "aegisvault.__main__:main"
@@ -102,6 +103,7 @@ module = [
     "httpx",
     "watchdog.*",
     "argon2.*",
+    "zeroconf.*",
 ]
 ignore_missing_imports = true
 
@@ -115,6 +117,7 @@ module = [
     "aegisvault.security.*",
     "aegisvault.platform.*",
     "aegisvault.api.*",
+    "aegisvault.sync.*",
     "aegisvault.config",
     "aegisvault.execution.inbox_watcher",
 ]
