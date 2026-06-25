@@ -74,6 +74,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     search_parser = sub.add_parser("search", help="Search vault content by keywords")
     search_parser.add_argument("query", help="Search query string")
+    search_parser.add_argument(
+        "--semantic", action="store_true", help="Enable semantic search via embeddings"
+    )
+    search_parser.add_argument("--top-k", type=int, default=5, help="Number of results to return")
 
     sub.add_parser("status", help="Show agent status (inbox/vault counts, recent tasks)")
 
@@ -146,12 +150,12 @@ def _count_vault_files(path: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def cmd_search(agent: AegisAgent, query: str) -> int:
+def cmd_search(agent: AegisAgent, query: str, semantic: bool = False, top_k: int = 5) -> int:
     """Search vault content by keywords."""
     from aegisvault.api.schemas import SearchQuery
 
     async def _search() -> Any:
-        return await agent.search(SearchQuery(query=query))
+        return await agent.search(SearchQuery(query=query, top_k=top_k, semantic=semantic))
 
     results = asyncio.run(_search())
     if not results:
@@ -364,7 +368,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("AegisVault CLI - %s", args.command)
 
         if args.command == "search":
-            return cmd_search(agent, args.query)
+            return cmd_search(
+                agent,
+                args.query,
+                semantic=getattr(args, "semantic", False),
+                top_k=getattr(args, "top_k", 5),
+            )
         elif args.command == "status":
             return cmd_status(agent, config)
         elif args.command == "list":

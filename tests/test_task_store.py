@@ -7,10 +7,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from aegisvault.api.schemas import ClassificationResult
+from aegisvault.api.schemas import ClassificationResult, SearchResult
 from aegisvault.model.embedding import DeterministicEmbeddingProvider
 from aegisvault.orchestration.state_machine import TaskState
-from aegisvault.orchestration.task_store import TaskStore
+from aegisvault.orchestration.task_store import TaskStore, rank_fusion
 
 
 @pytest.fixture
@@ -380,3 +380,409 @@ def test_index_embedding_uses_category_when_summary_and_tags_empty(
 
     assert len(results) == 1
     assert results[0].vault_path == vault_path
+
+
+# ---------------------------------------------------------------------------
+# Hybrid search tests
+# ---------------------------------------------------------------------------
+
+
+def test_hybrid_search_combines_fts_and_semantic(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """hybrid_search returns merged and weighted results from FTS + semantic."""
+    vault_path = Path("/vault/work/report.log")
+    task_store.index_classification(uuid4(), classification, vault_path)
+    task_store.index_embedding(uuid4(), vault_path, classification, embedding_provider)
+
+    results = task_store.hybrid_search("finance report", top_k=5, provider=embedding_provider)
+    assert len(results) >= 1
+    assert any(r.vault_path == vault_path for r in results)
+    # Scores should be in [0, 1] range.
+    for r in results:
+        assert 0.0 <= r.score <= 1.0
+
+
+def test_hybrid_search_respects_top_k(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """hybrid_search limits results to top_k."""
+    for i in range(5):
+        task_id = uuid4()
+        vp = Path(f"/vault/work/report{i}.log")
+        task_store.index_classification(
+            task_id, classification.model_copy(update={"summary": f"Report {i}"}), vp
+        )
+        task_store.index_embedding(
+            task_id,
+            vp,
+            classification.model_copy(update={"summary": f"Report {i}"}),
+            embedding_provider,
+        )
+
+    results = task_store.hybrid_search("Report", top_k=3, provider=embedding_provider)
+    assert len(results) == 3
+
+
+def test_hybrid_search_empty_query_returns_empty(
+    task_store: TaskStore,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """Empty query returns empty list."""
+    assert task_store.hybrid_search("", top_k=5, provider=embedding_provider) == []
+    assert task_store.hybrid_search("   ", top_k=5, provider=embedding_provider) == []
+
+
+def test_hybrid_search_fts_only(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+) -> None:
+    """hybrid_search falls back to pure FTS when no provider is given."""
+    vault_path = Path("/vault/work/report.log")
+    task_store.index_classification(uuid4(), classification, vault_path)
+
+    results = task_store.hybrid_search("finance", top_k=5, provider=None)
+    assert len(results) >= 1
+    assert results[0].vault_path == vault_path
+
+
+def test_hybrid_search_custom_weights(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """hybrid_search accepts configurable fts/semantic weights."""
+    vault_path = Path("/vault/work/report.log")
+    task_store.index_classification(uuid4(), classification, vault_path)
+    task_store.index_embedding(uuid4(), vault_path, classification, embedding_provider)
+
+    # FTS-heavy blending.
+    results_fts = task_store.hybrid_search(
+        "finance report",
+        top_k=5,
+        fts_weight=0.9,
+        semantic_weight=0.1,
+        provider=embedding_provider,
+    )
+    assert len(results_fts) >= 1
+
+    # Semantic-heavy blending.
+    results_sem = task_store.hybrid_search(
+        "finance report",
+        top_k=5,
+        fts_weight=0.0,
+        semantic_weight=1.0,
+        provider=embedding_provider,
+    )
+    assert len(results_sem) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Rank fusion tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_fusion_combines_two_lists() -> None:
+    """rank_fusion uses RRF to merge two non-empty result lists."""
+
+    r1 = [
+        SearchResult(
+            vault_path=Path("/a"),
+            category="work",
+            summary="doc a",
+            score=0.9,
+        ),
+        SearchResult(
+            vault_path=Path("/b"),
+            category="work",
+            summary="doc b",
+            score=0.5,
+        ),
+    ]
+    r2 = [
+        SearchResult(
+            vault_path=Path("/c"),
+            category="work",
+            summary="doc c",
+            score=0.8,
+        ),
+        SearchResult(
+            vault_path=Path("/a"),
+            category="work",
+            summary="doc a",
+            score=0.6,
+        ),
+    ]
+    fused = rank_fusion(r1, r2, weight_a=0.5, weight_b=0.5)
+    assert len(fused) == 3  # /a, /b, /c deduplicated
+    # /a should appear in both, thus higher combined score.
+    scores = {str(r.vault_path): r.score for r in fused}
+    assert scores[str(Path("/a"))] > scores[str(Path("/b"))]
+
+
+def test_rank_fusion_one_side_empty() -> None:
+    """rank_fusion returns the non-empty side when one is empty."""
+
+    r1 = [SearchResult(vault_path=Path("/x"), category="w", summary="x", score=0.5)]
+    assert rank_fusion(r1, []) == r1
+    assert rank_fusion([], r1) == r1
+
+
+def test_rank_fusion_both_empty() -> None:
+    """rank_fusion returns empty when both lists are empty."""
+
+    assert rank_fusion([], []) == []
+
+
+def test_rank_fusion_different_weights() -> None:
+    """rank_fusion respects weight_a / weight_b parameters."""
+
+    r1 = [SearchResult(vault_path=Path("/x"), category="w", summary="x", score=1.0)]
+    r2 = [SearchResult(vault_path=Path("/y"), category="w", summary="y", score=1.0)]
+    fused_equal = rank_fusion(r1, r2, weight_a=0.5, weight_b=0.5)
+    assert len(fused_equal) == 2
+
+    # When weight_a=1 and weight_b=0, /x still dominates.
+    fused_a = rank_fusion(r1, r2, weight_a=1.0, weight_b=0.0)
+    assert fused_a[0].vault_path == Path("/x")
+
+
+# ---------------------------------------------------------------------------
+# Batch indexing tests
+# ---------------------------------------------------------------------------
+
+
+def test_batch_index_embeddings_indexes_multiple_tasks(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """batch_index_embeddings encodes multiple task texts at once."""
+    ids = []
+    for i in range(3):
+        tid = uuid4()
+        vp = Path(f"/vault/work/r{i}.log")
+        task_store.create(tid, Path(f"/inbox/r{i}.txt"))
+        task_store.update_classification(
+            tid,
+            classification.model_copy(update={"summary": f"Report {i}"}),
+        )
+        task_store.update_vault_result(tid, vp, b"salt", b"nonce")
+        ids.append(tid)
+
+    task_store.batch_index_embeddings(ids, embedding_provider)
+
+    # Verify all three are searchable.
+    for i in range(3):
+        results = task_store.semantic_search(f"Report {i}", top_k=5, provider=embedding_provider)
+        assert len(results) >= 1
+
+
+def test_batch_index_embeddings_empty_list_noop(
+    task_store: TaskStore,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """batch_index_embeddings with empty list is a no-op."""
+    task_store.batch_index_embeddings([], embedding_provider)  # should not raise
+
+
+def test_batch_index_embeddings_skips_unchanged(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """batch_index_embeddings does not re-embed when content hasn't changed."""
+    tid = uuid4()
+    vp = Path("/vault/work/r.log")
+    task_store.create(tid, Path("/inbox/r.txt"))
+    task_store.update_classification(tid, classification)
+    task_store.update_vault_result(tid, vp, b"salt", b"nonce")
+
+    # First call embeds.
+    task_store.batch_index_embeddings([tid], embedding_provider)
+
+    # Second call should be a no-op (content unchanged).
+    # Verify it doesn't raise.
+    task_store.batch_index_embeddings([tid], embedding_provider)
+
+
+# ---------------------------------------------------------------------------
+# Index embedding BLOB storage tests
+# ---------------------------------------------------------------------------
+
+
+def test_index_embedding_stores_blob(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """index_embedding stores vector as a BLOB column."""
+    vault_path = Path("/vault/work/report.log")
+    task_store.index_embedding(uuid4(), vault_path, classification, embedding_provider)
+
+    with task_store._connect() as conn:
+        row = conn.execute("SELECT vector_blob, content_hash FROM vault_vectors").fetchone()
+        assert row is not None
+        assert row[0] is not None  # BLOB is populated
+        assert isinstance(row[0], bytes)
+        assert row[1] is not None  # content_hash is populated
+
+
+def test_index_embedding_incremental_skip(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """index_embedding skips re-embedding when content hash is unchanged."""
+    vault_path = Path("/vault/work/report.log")
+    tid = uuid4()
+    task_store.index_embedding(tid, vault_path, classification, embedding_provider)
+
+    with task_store._connect() as conn:
+        row1 = conn.execute(
+            "SELECT vector_blob FROM vault_vectors WHERE task_id = ?", (str(tid),)
+        ).fetchone()
+    assert row1 is not None
+
+    # Re-index with same classification — should be a no-op.
+    task_store.index_embedding(tid, vault_path, classification, embedding_provider)
+
+    with task_store._connect() as conn:
+        row2 = conn.execute(
+            "SELECT vector_blob FROM vault_vectors WHERE task_id = ?", (str(tid),)
+        ).fetchone()
+    assert row2 is not None
+    assert row1[0] == row2[0]  # BLOB unchanged
+
+
+# ---------------------------------------------------------------------------
+# find_similar tests
+# ---------------------------------------------------------------------------
+
+
+def test_find_similar_returns_top_k(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """find_similar returns the top_k most similar documents."""
+    # Index 3 documents.
+    target_id = uuid4()
+    ids = [target_id]
+    for i in range(3):
+        tid = target_id if i == 0 else uuid4()
+        if i != 0:
+            ids.append(tid)
+        vp = Path(f"/vault/work/r{i}.log")
+        summary = "finance quarterly report" if i == 0 else f"report {i}"
+        task_store.index_embedding(
+            tid,
+            vp,
+            classification.model_copy(update={"summary": summary}),
+            embedding_provider,
+        )
+
+    similar = task_store.find_similar(target_id, top_k=2)
+    assert len(similar) == 2
+    for item in similar:
+        assert "task_id" in item
+        assert "score" in item
+        assert "category" in item
+        assert "summary" in item
+        assert item["task_id"] != str(target_id)
+
+
+def test_find_similar_missing_task_returns_empty(
+    task_store: TaskStore,
+) -> None:
+    """find_similar returns empty when the target task has no embedding."""
+    assert task_store.find_similar(uuid4()) == []
+
+
+# ---------------------------------------------------------------------------
+# cluster_vault tests
+# ---------------------------------------------------------------------------
+
+
+def test_cluster_vault_returns_clusters(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """cluster_vault partitions documents into k clusters."""
+    for i in range(6):
+        tid = uuid4()
+        vp = Path(f"/vault/work/r{i}.log")
+        task_store.index_embedding(
+            tid,
+            vp,
+            classification.model_copy(update={"summary": f"doc {i}"}),
+            embedding_provider,
+        )
+
+    clusters = task_store.cluster_vault(n_clusters=3)
+    assert len(clusters) == 3
+    total = sum(len(items) for items in clusters.values())
+    assert total == 6
+
+
+def test_cluster_vault_adjusts_k_when_less_data(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """cluster_vault reduces k when there are fewer vectors than requested."""
+    for i in range(2):
+        tid = uuid4()
+        vp = Path(f"/vault/work/r{i}.log")
+        task_store.index_embedding(
+            tid,
+            vp,
+            classification.model_copy(update={"summary": f"doc {i}"}),
+            embedding_provider,
+        )
+
+    clusters = task_store.cluster_vault(n_clusters=5)
+    assert len(clusters) == 2  # clamped to len(vectors)
+
+
+def test_cluster_vault_empty_returns_empty(
+    task_store: TaskStore,
+) -> None:
+    """cluster_vault returns {} when no vectors exist."""
+    assert task_store.cluster_vault() == {}
+
+
+def test_cluster_vault_deterministic_with_seed(
+    task_store: TaskStore,
+    classification: ClassificationResult,
+    embedding_provider: DeterministicEmbeddingProvider,
+) -> None:
+    """cluster_vault produces repeatable results with the same seed."""
+    for i in range(4):
+        tid = uuid4()
+        vp = Path(f"/vault/work/r{i}.log")
+        task_store.index_embedding(
+            tid,
+            vp,
+            classification.model_copy(update={"summary": f"doc {i}"}),
+            embedding_provider,
+        )
+
+    c1 = task_store.cluster_vault(n_clusters=2, seed=42)
+    c2 = task_store.cluster_vault(n_clusters=2, seed=42)
+
+    # Same seed -> same cluster assignments.
+    c1_items = sorted(
+        [(cid, sorted(item["task_id"] for item in items)) for cid, items in c1.items()],
+        key=lambda x: x[0],
+    )
+    c2_items = sorted(
+        [(cid, sorted(item["task_id"] for item in items)) for cid, items in c2.items()],
+        key=lambda x: x[0],
+    )
+    assert c1_items == c2_items

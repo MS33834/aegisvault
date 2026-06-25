@@ -444,7 +444,7 @@ async def test_agent_search_with_semantic_hybrid(
         embedding_provider=provider,
     )
 
-    results = await agent.search(SearchQuery(query="finance", top_k=5))
+    results = await agent.search(SearchQuery(query="finance", top_k=5, semantic=True))
 
     assert len(results) == 1
     assert results[0].vault_path == vault_path

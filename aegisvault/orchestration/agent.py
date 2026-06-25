@@ -187,24 +187,29 @@ class AegisAgent:
         )
 
     async def search(self, query: SearchQuery) -> list[SearchResult]:
-        """Search vault metadata by keywords and semantic similarity."""
-        fts_results = await asyncio.to_thread(
-            self.task_store.search, query.query, top_k=query.top_k
-        )
-        if self._embedding_provider is None:
-            return fts_results
-        provider = self._embedding_provider
+        """Search vault metadata by keywords and semantic similarity.
 
-        # Embedding is CPU-bound, also offload to a worker thread.
-        def _semantic() -> list[SearchResult]:
-            return self.task_store.semantic_search(
-                query.query,
-                top_k=query.top_k,
-                provider=provider,
-            )
+        When ``--semantic`` is explicitly requested, and an embedding provider
+        is available, the search uses the weighted hybrid fusion from
+        ``TaskStore.hybrid_search``.  Otherwise it falls back to pure
+        full-text search.
+        """
+        if query.semantic and self._embedding_provider is not None:
+            provider = self._embedding_provider
 
-        semantic_results = await asyncio.to_thread(_semantic)
-        return _merge_search_results(fts_results, semantic_results, top_k=query.top_k)
+            def _hybrid() -> list[SearchResult]:
+                return self.task_store.hybrid_search(
+                    query=query.query,
+                    top_k=query.top_k,
+                    fts_weight=0.3,
+                    semantic_weight=0.7,
+                    provider=provider,
+                )
+
+            return await asyncio.to_thread(_hybrid)
+
+        # Fallback: pure FTS.
+        return await asyncio.to_thread(self.task_store.search, query.query, top_k=query.top_k)
 
     def fill_password(self, entry_path: str) -> bool:
         """Fill a password for *entry_path* into the clipboard / active window.
@@ -253,43 +258,3 @@ class AegisAgent:
 
     async def __aexit__(self, *args: object) -> None:
         await self.aclose()
-
-
-def _merge_search_results(
-    fts_results: list[SearchResult],
-    semantic_results: list[SearchResult],
-    top_k: int,
-) -> list[SearchResult]:
-    """Combine keyword and semantic results using a simple weighted score."""
-    if not fts_results:
-        return semantic_results[:top_k]
-    if not semantic_results:
-        return fts_results[:top_k]
-
-    fts_max = max(result.score for result in fts_results)
-    fts_scores = {
-        str(result.vault_path): result.score / fts_max if fts_max > 0 else 0.0
-        for result in fts_results
-    }
-    semantic_max = max(result.score for result in semantic_results)
-    semantic_scores = {
-        str(result.vault_path): result.score / semantic_max if semantic_max > 0 else 0.0
-        for result in semantic_results
-    }
-
-    merged: dict[str, SearchResult] = {}
-    for result in fts_results:
-        merged[str(result.vault_path)] = result
-    for result in semantic_results:
-        if str(result.vault_path) not in merged:
-            merged[str(result.vault_path)] = result
-
-    combined: list[SearchResult] = []
-    for vault_path_key, result in merged.items():
-        score = 0.5 * fts_scores.get(vault_path_key, 0.0) + 0.5 * semantic_scores.get(
-            vault_path_key, 0.0
-        )
-        combined.append(result.model_copy(update={"score": score}))
-
-    combined.sort(key=lambda item: item.score, reverse=True)
-    return combined[:top_k]
