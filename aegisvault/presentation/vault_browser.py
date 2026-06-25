@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import sqlite3
@@ -335,7 +336,10 @@ class VaultBrowser(QDialog):
                 continue
             try:
                 classification = ClassificationResult.model_validate_json(classification_json)
-            except Exception:
+            except (ValueError, TypeError):
+                logging.getLogger(__name__).warning(
+                    "Failed to validate classification JSON for item %s", row["task_id"]
+                )
                 continue
             vault_path = Path(row["vault_path"])
             file_size = vault_path.stat().st_size if vault_path.exists() else 0
@@ -636,14 +640,14 @@ class VaultBrowser(QDialog):
                     "(binary content — preview not available)\n\n"
                     f"File size: {_human_size(dest_path.stat().st_size)}"
                 )
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             self._preview_stack.setCurrentIndex(0)
             self._preview_text.setPlainText(f"Preview failed: {exc}")
         finally:
             try:
                 if "dest_path" in locals():
                     dest_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
 
     # -------------------------------------------------------------------

@@ -104,6 +104,7 @@ class SECURITY_ATTRIBUTES(ctypes.Structure):
 # ── Win32 function prototypes (lazy-loaded on Windows) ────────────────
 
 _win32_loaded = False
+_lock = threading.Lock()
 
 # Module-level placeholders — assigned inside _ensure_win32().
 _CreateAppContainerProfile: object = None
@@ -133,6 +134,9 @@ def _ensure_win32() -> None:
         return
     if _win32_loaded:
         return
+    with _lock:
+        if _win32_loaded:
+            return
 
     global _CreateAppContainerProfile
     global _DeleteAppContainerProfile

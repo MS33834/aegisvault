@@ -264,7 +264,7 @@ def cmd_export(
             vault_manager.decrypt(vault_path, item["salt"], dest)
             exported += 1
             print(f"  Exported: {dest}")
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             print(f"  Failed:   {vault_path} ({exc})", file=sys.stderr)
 
     print(f"\nExported {exported}/{len(items)} file(s) to {output_dir}")

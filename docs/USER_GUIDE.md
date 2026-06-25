@@ -330,7 +330,7 @@ AegisVault 支持通过外部密码管理器管理凭据：
 查看审计日志确认无异常操作：
 
 ```bash
-cat ~/AegisVault/Logs/audit.log | tail -100
+cat ~/AegisVault/Logs/audit.log.ndjson | tail -100
 ```
 
 日志记录所有关键操作（登录、加密、解密、配置变更），并通过 HMAC 防篡改。

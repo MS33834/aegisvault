@@ -269,8 +269,19 @@ class WindowsSandboxRunner(SandboxRunner):
 
     @staticmethod
     def _ps_quote(value: str) -> str:
-        """Single-quote a value for PowerShell, escaping embedded quotes."""
-        return "'" + value.replace("'", "''") + "'"
+        """Single-quote a value for PowerShell with full special-character escaping.
+
+        Escapes single-quotes (required within single-quoted strings) and
+        additionally escapes backticks, dollar signs, double quotes and
+        newlines as defense-in-depth against injection.
+        """
+        safe = value
+        safe = safe.replace("`", "``")
+        safe = safe.replace("$", "`$")
+        safe = safe.replace('"', '`"')
+        safe = safe.replace("\n", "`n")
+        safe = safe.replace("'", "''")
+        return "'" + safe + "'"
 
     def _ps_build_arg_list(self, args: list[str]) -> str:
         """Build a PowerShell array literal from command arguments."""
@@ -508,6 +519,8 @@ class WindowsSandboxRunner(SandboxRunner):
             # required (the Win32 helper currently does not support piped
             # stdin).
             if sys.platform == "win32" and input_data is None:
+                from aegisvault.security.win32_appcontainer import AppContainerError
+
                 try:
                     return self._try_win32_appcontainer(
                         resolved,
@@ -516,9 +529,7 @@ class WindowsSandboxRunner(SandboxRunner):
                         check=check,
                         env_vars=env_vars,
                     )
-                except (NotImplementedError, ModuleNotFoundError):
-                    _logger.debug("Win32 AppContainer unavailable; falling back to PowerShell")
-                except Exception:
+                except (AppContainerError, NotImplementedError, ModuleNotFoundError, OSError):
                     _logger.debug(
                         "Win32 AppContainer failed; falling back to PowerShell",
                         exc_info=True,

@@ -5,7 +5,6 @@ control how that root secret is obtained and protected.
 """
 
 import contextlib
-import hashlib
 import logging
 import os
 import stat
@@ -359,7 +358,7 @@ if sys.platform == "win32":
         status = _NCRYPT.NCryptOpenStorageProvider(
             ctypes.byref(provider),
             _MS_PLATFORM_CRYPTO_PROVIDER,
-            0,
+            wintypes.DWORD(0),
         )
         _check_ncrypt_status(status, "NCryptOpenStorageProvider")
         return provider
@@ -731,6 +730,7 @@ def rotate_master_key(
         file_count = 0
 
     # 4. Atomically replace the storage path.  Back up the old file first.
+    backup_path = None
     if storage_path.exists():
         backup_path = storage_path.with_suffix(".bin.bak")
         storage_path.replace(backup_path)
@@ -739,11 +739,7 @@ def rotate_master_key(
         # Store the new master key material (or the wrapped vault key).
         # For FilePassword/Dpapi/Tpm providers, the secret is already stored
         # by get_key().  Write a rotation timestamp marker.
-        rotation_marker = (
-            datetime.now(UTC).isoformat().encode("utf-8")
-            + b"\n"
-            + hashlib.sha256(new_vault_key).digest()
-        )
+        rotation_marker = datetime.now(UTC).isoformat().encode("utf-8") + b"\n"
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_bytes(storage_path.with_name("master_key.bin"), rotation_marker)
     except Exception:

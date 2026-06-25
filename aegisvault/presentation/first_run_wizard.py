@@ -170,8 +170,12 @@ class ModelPage(QWizardPage):
                     self._test_label.setText("连接成功")
                 else:
                     self._test_label.setText(f"失败 ({resp.status_code})")
-        except Exception:
-            self._test_label.setText("无法连接")
+        except httpx.ConnectError:
+            self._test_label.setText("无法连接 — 请检查 URL")
+        except httpx.TimeoutException:
+            self._test_label.setText("连接超时 — 服务未响应")
+        except httpx.HTTPStatusError:
+            self._test_label.setText("HTTP 错误")
 
 
 class SecurityPage(QWizardPage):
