@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from aegisvault.api.schemas import ClassificationResult, SensitivityLevel
+from aegisvault.connections.manager import ConnectionManager
+from aegisvault.connections.models import Connection
 from aegisvault.model.provider import ModelProvider, create_provider
-from aegisvault.platform.manager import ConnectionManager
-from aegisvault.platform.models import Connection
 
 _FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)\s*\n?(.*?)\n?```", re.DOTALL)
 
@@ -79,7 +79,6 @@ SENSITIVE_KEYWORDS: dict[str, list[str]] = {
         "prescription",
         "diagnosis",
         "lab",
-        "report",
         "检查报告",
         "化验",
     ],

@@ -18,7 +18,7 @@ Design notes
 - Every pairing session uses fresh ephemeral keys → forward secrecy.
 - The pairing code acts as HKDF salt, binding the resulting key to the
   out-of-band code exchange.
-- Shared secrets are sealed with :func:`aegisvault.platform.secure_storage.seal`
+- Shared secrets are sealed with :func:`aegisvault.connections.secure_storage.seal`
   before persisting to `config_dir / "devices.json"`.
 - Max 5 paired devices (``MAX_PAIRED_DEVICES``).
 """
@@ -280,7 +280,7 @@ class DeviceAuth:
         if record is None or not record.sealed_secret:
             return None
 
-        from aegisvault.platform.secure_storage import unseal
+        from aegisvault.connections.secure_storage import unseal
 
         hex_secret = unseal(record.sealed_secret)
         return bytes.fromhex(hex_secret)
@@ -296,7 +296,7 @@ class DeviceAuth:
     # ------------------------------------------------------------------
 
     def _make_record(self, device_id: str, device_name: str, shared_secret: bytes) -> DeviceRecord:
-        from aegisvault.platform.secure_storage import seal
+        from aegisvault.connections.secure_storage import seal
 
         return DeviceRecord(
             device_id=device_id,

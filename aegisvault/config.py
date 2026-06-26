@@ -58,7 +58,7 @@ class AegisConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="AEGISVAULT_",
-        env_nested_separator="__",  # type: ignore[typeddict-unknown-key]
+        env_nested_delimiter="__",
     )
 
     app_name: str = "AegisVault"

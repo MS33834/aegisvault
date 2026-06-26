@@ -37,10 +37,10 @@ except ModuleNotFoundError as exc:
 from aegisvault import __version__
 from aegisvault.api.schemas import ClassificationResult, SensitivityLevel, TaskSummary
 from aegisvault.config import AegisConfig
+from aegisvault.connections.manager import ConnectionManager
 from aegisvault.execution.vault import VaultManager
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
-from aegisvault.platform.manager import ConnectionManager
 from aegisvault.presentation.connection_dialog import ConnectionManagerDialog
 from aegisvault.presentation.settings_dialog import SettingsDialog
 from aegisvault.presentation.vault_browser import VaultBrowser

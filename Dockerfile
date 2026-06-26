@@ -47,6 +47,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --chown=aegisvault:aegisvault pyproject.toml README.md ./
 COPY --chown=aegisvault:aegisvault aegisvault ./aegisvault
 
+# Fix /app ownership for non-root user
+RUN chown -R aegisvault:aegisvault /app
+
 USER aegisvault
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

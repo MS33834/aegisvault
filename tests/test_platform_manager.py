@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from aegisvault.platform.manager import ConnectionManager
-from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.connections.manager import ConnectionManager
+from aegisvault.connections.models import Connection, PlatformType
 
 
 @pytest.fixture

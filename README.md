@@ -51,7 +51,7 @@ Key paths default to `~/AegisVault/Inbox` and `~/AegisVault/Vault`. You can chan
 
 ### 3. Add a model connection
 
-AegisVault needs a chat-capable model for classification. The GUI can add a connection, or you can create one programmatically via `aegisvault.platform.ConnectionManager`.
+AegisVault needs a chat-capable model for classification. The GUI can add a connection, or you can create one programmatically via `aegisvault.connections.ConnectionManager`.
 
 Recommended local options:
 
@@ -105,7 +105,7 @@ Main packages:
 | Package | Responsibility |
 |---------|----------------|
 | `aegisvault.security` | Encryption, key hierarchy, audit log, sandbox, firewall, offline verification, password stores |
-| `aegisvault.platform` | Connection models, connection manager, field-level credential sealing |
+| `aegisvault.connections` | Connection models, connection manager, field-level credential sealing |
 | `aegisvault.model` | Classifier, embedding providers, OpenAI-compatible provider |
 | `aegisvault.orchestration` | Agent, pipeline, state machine, task store |
 | `aegisvault.execution` | Inbox watcher, vault manager |

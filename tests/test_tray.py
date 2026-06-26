@@ -322,7 +322,7 @@ def test_tray_no_enabled_connections_shows_placeholder(qt_stubs: None, config: A
 
 def test_tray_remote_connection_marked_unverified(qt_stubs: None, config: AegisConfig) -> None:
     """A remote enabled connection is labelled as unverified."""
-    from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+    from aegisvault.connections.models import AuthMethod, Connection, PlatformType
     from aegisvault.presentation.tray import TrayApplication
 
     tray = TrayApplication(config=config)

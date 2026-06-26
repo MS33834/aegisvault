@@ -7,18 +7,15 @@ services:
     restart: unless-stopped
     # Run in headless mode (no system tray UI in container)
     command: ["--no-tray"]
+    environment:
+      - AEGISVAULT_PATHS__INBOX=/app/AegisVault/Inbox
+      - AEGISVAULT_PATHS__VAULT=/app/AegisVault/Vault
+      - AEGISVAULT_PATHS__INDEX=/app/AegisVault/Index
     volumes:
-      # Mount custom paths for persistent data
-      - ./data/inbox:/app/data/inbox
-      - ./data/vault:/app/data/vault
-      - ./data/index:/app/data/index
-      - ./data/connections:/app/data/connections
-    # Uncomment to override the default paths:
-    # command:
-    #   - "--no-tray"
-    #   - "--inbox=/app/data/inbox"
-    #   - "--vault=/app/data/vault"
-    #   - "--index=/app/data/index"
-    #   - "--connections=/app/data/connections/file.json"
+      # Mount persistent data matching default app paths
+      - ./data/inbox:/app/AegisVault/Inbox
+      - ./data/vault:/app/AegisVault/Vault
+      - ./data/index:/app/AegisVault/Index
+      - ./data/config:/app/AegisVault/Config
     stdin_open: true
     tty: true

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from aegisvault.config import AegisConfig
-from aegisvault.platform.models import Connection, PlatformType
+from aegisvault.connections.models import Connection, PlatformType
 from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.policy import (
     SecurityPolicyError,

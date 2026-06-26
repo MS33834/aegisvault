@@ -12,7 +12,7 @@ from functools import wraps
 from typing import TypeVar
 
 from aegisvault.config import AegisConfig
-from aegisvault.platform.models import Connection
+from aegisvault.connections.models import Connection
 from aegisvault.security.audit_log import AuditLogger
 
 

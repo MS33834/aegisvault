@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aegisvault.platform.secure_storage import (
+from aegisvault.connections.secure_storage import (
     _key_file_path,
     _load_or_create_fallback_key,
     seal,
@@ -22,7 +22,7 @@ def isolated_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     key_path = tmp_path / "storage.key"
     monkeypatch.setenv("AEGISVAULT_STORAGE_KEY_FILE", str(key_path))
     # Force re-evaluation of the cached module-level default by patching the helper.
-    monkeypatch.setattr("aegisvault.platform.secure_storage._DEFAULT_KEY_PATH", key_path)
+    monkeypatch.setattr("aegisvault.connections.secure_storage._DEFAULT_KEY_PATH", key_path)
     return key_path
 
 
@@ -108,7 +108,7 @@ def test_unseal_dpapi_raises_on_non_windows() -> None:
 
 def test_seal_uses_dpapi_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """On Windows, seal uses DPAPI and prefixes with 'dpapi:'."""
-    monkeypatch.setattr("aegisvault.platform.secure_storage._is_windows", lambda: True)
+    monkeypatch.setattr("aegisvault.connections.secure_storage._is_windows", lambda: True)
     fake_protected = b"protected-data"
     mock_protect = MagicMock(return_value=fake_protected)
     monkeypatch.setattr("aegisvault.security.win_helpers.protect_data", mock_protect)
@@ -121,7 +121,7 @@ def test_seal_uses_dpapi_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_unseal_uses_dpapi_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """On Windows, unseal uses DPAPI for 'dpapi:' prefixed values."""
-    monkeypatch.setattr("aegisvault.platform.secure_storage._is_windows", lambda: True)
+    monkeypatch.setattr("aegisvault.connections.secure_storage._is_windows", lambda: True)
     fake_unprotected = b"original-secret"
     mock_unprotect = MagicMock(return_value=fake_unprotected)
     monkeypatch.setattr("aegisvault.security.win_helpers.unprotect_data", mock_unprotect)

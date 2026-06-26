@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from aegisvault.platform.models import Connection, PlatformType
-from aegisvault.platform.secure_storage import seal_dict, unseal_dict
+from aegisvault.connections.models import Connection, PlatformType
+from aegisvault.connections.secure_storage import seal_dict, unseal_dict
 
 if TYPE_CHECKING:
     from aegisvault.model.provider import ModelProvider

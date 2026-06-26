@@ -118,7 +118,7 @@ disable_error_code = ["operator", "attr-defined"]
 module = [
     "aegisvault.presentation.*",
     "aegisvault.security.*",
-    "aegisvault.platform.*",
+    "aegisvault.connections.*",
     "aegisvault.api.*",
     "aegisvault.sync.*",
     "aegisvault.config",

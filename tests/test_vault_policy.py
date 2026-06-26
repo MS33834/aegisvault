@@ -9,13 +9,13 @@ import pytest
 
 from aegisvault.api.schemas import ClassificationResult, FileEvent
 from aegisvault.config import AegisConfig
+from aegisvault.connections.models import Connection, PlatformType
 from aegisvault.execution.vault import VaultManager
 from aegisvault.model.classifier import Classifier
 from aegisvault.model.provider import ModelProvider
 from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.state_machine import TaskState
 from aegisvault.orchestration.task_store import TaskStore
-from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.keytree import derive_vault_key
 from aegisvault.security.policy import SecurityPolicyError, require_trusted_local_connection

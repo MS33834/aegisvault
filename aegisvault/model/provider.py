@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import httpx
 
-from aegisvault.platform.models import AuthMethod, Connection
+from aegisvault.connections.models import AuthMethod, Connection
 
 logger = logging.getLogger(__name__)
 

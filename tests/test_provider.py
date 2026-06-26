@@ -7,6 +7,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from aegisvault.connections.models import AuthMethod, Connection, PlatformType
 from aegisvault.model.provider import (
     OpenAICompatibleProvider,
     _build_headers,
@@ -15,7 +16,6 @@ from aegisvault.model.provider import (
     create_provider,
     register_provider,
 )
-from aegisvault.platform.models import AuthMethod, Connection, PlatformType
 
 
 @pytest.fixture

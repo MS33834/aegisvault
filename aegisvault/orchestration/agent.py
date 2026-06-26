@@ -7,13 +7,13 @@ from uuid import UUID
 
 from aegisvault.api.schemas import FileEvent, SearchQuery, SearchResult, TaskStatus
 from aegisvault.config import AegisConfig
+from aegisvault.connections.manager import ConnectionManager
 from aegisvault.execution.inbox_watcher import InboxWatcher
 from aegisvault.execution.vault import VaultManager
 from aegisvault.model.classifier import Classifier
 from aegisvault.model.embedding import LocalEmbeddingProvider, SentenceTransformersProvider
 from aegisvault.orchestration.pipeline import ProcessingPipeline
 from aegisvault.orchestration.task_store import TaskStore
-from aegisvault.platform.manager import ConnectionManager
 from aegisvault.security.audit_log import AuditLogger
 from aegisvault.security.master_key import (
     MasterKeyProvider,

@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 from pydantic import SecretStr
 
-from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+from aegisvault.connections.models import AuthMethod, Connection, PlatformType
 
 # ---------------------------------------------------------------------------
 # Helpers

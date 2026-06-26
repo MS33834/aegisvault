@@ -8,6 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from aegisvault.api.schemas import ClassificationResult
+from aegisvault.connections.manager import ConnectionManager
+from aegisvault.connections.models import Connection, PlatformType
 from aegisvault.model import ModelProvider
 from aegisvault.model.classifier import (
     CLASSIFICATION_PROMPT,
@@ -15,8 +17,6 @@ from aegisvault.model.classifier import (
     _extract_json,
     _normalize_classification_data,
 )
-from aegisvault.platform.manager import ConnectionManager
-from aegisvault.platform.models import Connection, PlatformType
 
 
 class FakeProvider(ModelProvider):

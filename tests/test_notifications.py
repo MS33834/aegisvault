@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aegisvault.platform.notifications import (
+from aegisvault.connections.notifications import (
     DesktopNotifier,
     _LinuxNotifier,
     _MacOSNotifier,

@@ -30,8 +30,8 @@ except ModuleNotFoundError as exc:
 
 from pydantic import SecretStr
 
-from aegisvault.platform.manager import ConnectionManager
-from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+from aegisvault.connections.manager import ConnectionManager
+from aegisvault.connections.models import AuthMethod, Connection, PlatformType
 
 
 class ConnectionEditDialog(QDialog):

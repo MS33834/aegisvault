@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from aegisvault.platform.manager import ConnectionManager
-from aegisvault.platform.models import AuthMethod, Connection, PlatformType
+from aegisvault.connections.manager import ConnectionManager
+from aegisvault.connections.models import AuthMethod, Connection, PlatformType
 
 from .presentation_stubs import (
     FakeApplication,
