@@ -10,6 +10,7 @@ the helper ``is_available()`` returns ``False`` and calling
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -69,10 +70,18 @@ if _FASTAPI_AVAILABLE:
     ) -> Any:
         """FastAPI dependency that validates Bearer token when configured."""
         expected = _resolve_token()
-        if expected is not None and (
-            credentials is None or getattr(credentials, "credentials", None) != expected
-        ):
-            raise HTTPException(status_code=401, detail="Invalid or missing authentication token")  # type: ignore[misc]
+        if expected is not None:
+            if credentials is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or missing authentication token",
+                )  # type: ignore[misc]
+            provided = getattr(credentials, "credentials", None)
+            if provided is None or not hmac.compare_digest(provided.encode(), expected.encode()):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or missing authentication token",
+                )  # type: ignore[misc]
         return credentials
 
 else:

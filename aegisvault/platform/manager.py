@@ -1,15 +1,19 @@
 """Connection manager for platform configurations."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from aegisvault.model import ModelProvider
 from aegisvault.platform.models import Connection, PlatformType
 from aegisvault.platform.secure_storage import seal_dict, unseal_dict
+
+if TYPE_CHECKING:
+    from aegisvault.model.provider import ModelProvider
 
 SENSITIVE_FIELDS = {"api_key", "password"}
 
@@ -79,7 +83,7 @@ class ConnectionManager:
         """
         if self._provider_factory is not None:
             return self._provider_factory(connection)
-        from aegisvault.model import create_provider
+        from aegisvault.model.provider import create_provider
 
         return create_provider(connection)
 

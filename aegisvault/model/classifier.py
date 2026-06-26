@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from aegisvault.api.schemas import ClassificationResult, SensitivityLevel
-from aegisvault.model import ModelProvider, create_provider
+from aegisvault.model.provider import ModelProvider, create_provider
 from aegisvault.platform.manager import ConnectionManager
 from aegisvault.platform.models import Connection
 

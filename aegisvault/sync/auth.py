@@ -159,7 +159,9 @@ class DeviceAuth:
         if time.time() > self._pending_pairing.expires_at:
             self._pending_pairing = None
             raise RuntimeError("Pairing code expired")
-        if not pairing_code or pairing_code != self._pending_pairing.code:
+        if not pairing_code or not secrets.compare_digest(
+            pairing_code.encode(), self._pending_pairing.code.encode()
+        ):
             raise RuntimeError("Pairing code mismatch")
 
         if len(self._devices) >= MAX_PAIRED_DEVICES:

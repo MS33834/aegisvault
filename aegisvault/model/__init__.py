@@ -1,5 +1,7 @@
 """Model capability layer."""
 
+from aegisvault.model.classifier import Classifier
+from aegisvault.model.embedding import LocalEmbeddingProvider
 from aegisvault.model.provider import (
     BUILT_IN_PROVIDER_NAMES,
     ModelProvider,
@@ -10,6 +12,8 @@ from aegisvault.model.provider import (
 
 __all__ = [
     "BUILT_IN_PROVIDER_NAMES",
+    "Classifier",
+    "LocalEmbeddingProvider",
     "ModelProvider",
     "OpenAICompatibleProvider",
     "create_provider",
